@@ -1,9 +1,13 @@
 package com.example.data.repository
 
 import android.content.Context
+import com.example.data.chat.VaultChatStorageManager
+import com.example.data.config.VaultAuthConfig
+import com.example.data.config.VaultAuthConfigManager
 import com.example.data.filesystem.VaultFileSystemManager
 import com.example.data.local.VaultDao
 import com.example.data.model.BacklinkItem
+import com.example.data.model.ChatMessage
 import com.example.data.model.GraphEdge
 import com.example.data.model.GraphNode
 import com.example.data.model.VaultNote
@@ -17,8 +21,10 @@ import com.example.data.skills.RuntimeJvmInfo
 import com.example.data.skills.StorageAudit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.File
 import java.util.regex.Pattern
 
 data class SearchResult(
@@ -38,9 +44,14 @@ class VaultRepository(
     private val fileSystemManager: VaultFileSystemManager,
     private val context: Context
 ) {
+    val authConfigManager = VaultAuthConfigManager(context)
+    val chatStorageManager = VaultChatStorageManager(context)
     val skillsManager = AndroidSkillsManager(context)
+
     val skillsCatalog: List<AndroidSkillDefinition> get() = skillsManager.skillsCatalog
     val androidKnowledgeBase: List<AndroidKnowledgeTopic> get() = skillsManager.androidKnowledgeBase
+
+    val authConfig: StateFlow<VaultAuthConfig> get() = authConfigManager.configFlow
 
     fun getDeviceTelemetry(): DeviceTelemetry = skillsManager.getDeviceTelemetry()
     fun getDisplayMetrics(): DisplayMetricsInfo = skillsManager.getDisplayMetrics()
@@ -65,7 +76,43 @@ class VaultRepository(
     val vaultAbsolutePath: String get() = fileSystemManager.vaultAbsolutePath
 
     suspend fun initialize() {
+        authConfigManager.initialize()
         fileSystemManager.initializeDefaultVaultIfEmpty()
+    }
+
+    suspend fun loadChatHistory(): List<ChatMessage> {
+        return chatStorageManager.loadChatHistory()
+    }
+
+    suspend fun saveChatHistory(messages: List<ChatMessage>): Boolean {
+        return chatStorageManager.saveChatHistory(messages)
+    }
+
+    suspend fun clearChatHistory(): List<ChatMessage> {
+        return chatStorageManager.clearChatHistory()
+    }
+
+    suspend fun exportChatToMarkdown(messages: List<ChatMessage>): File {
+        val file = chatStorageManager.exportChatToMarkdownFile(messages)
+        syncVault()
+        return file
+    }
+
+    suspend fun updateApiKey(apiKey: String): Boolean {
+        return authConfigManager.updateApiKey(apiKey)
+    }
+
+    suspend fun updatePersona(
+        name: String,
+        title: String,
+        prompt: String,
+        temperature: Double
+    ): Boolean {
+        return authConfigManager.updatePersona(name, title, prompt, temperature)
+    }
+
+    suspend fun exportVaultZip(): File {
+        return fileSystemManager.exportVaultZipArchive()
     }
 
     suspend fun syncVault(): Int {

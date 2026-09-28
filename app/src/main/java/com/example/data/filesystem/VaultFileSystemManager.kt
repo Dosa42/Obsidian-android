@@ -7,7 +7,14 @@ import com.example.data.model.VaultNote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.regex.Pattern
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class VaultFileSystemManager(
     private val context: Context,
@@ -20,13 +27,18 @@ class VaultFileSystemManager(
             if (!publicVault.exists()) {
                 publicVault.mkdirs()
             }
-            if (publicVault.canWrite()) {
-                publicVault
-            } else {
-                File(context.filesDir, "ObsidianVault").apply { if (!exists()) mkdirs() }
-            }
+            // Ensure essential system directories exist on external storage
+            File(publicVault, ".database").apply { if (!exists()) mkdirs() }
+            File(publicVault, ".auth").apply { if (!exists()) mkdirs() }
+            File(publicVault, ".chat").apply { if (!exists()) mkdirs() }
+            File(publicVault, ".diagnostics").apply { if (!exists()) mkdirs() }
+
+            publicVault
         } catch (e: Exception) {
-            File(context.filesDir, "ObsidianVault").apply { if (!exists()) mkdirs() }
+            // Absolute fallback path if environment returned empty
+            val fallback = File("/storage/emulated/0/Download/ObsidianVault")
+            if (!fallback.exists()) fallback.mkdirs()
+            fallback
         }
     }
 
@@ -37,28 +49,40 @@ class VaultFileSystemManager(
 
     suspend fun initializeDefaultVaultIfEmpty() = withContext(Dispatchers.IO) {
         val root = vaultRoot
-        
-        // If internal storage had notes from previous version, migrate them to Download/ObsidianVault
+
+        // Migrate any legacy data if previously stored in internal app filesDir
         val legacyDir = File(context.filesDir, "ObsidianVault")
         if (legacyDir.exists() && legacyDir.absolutePath != root.absolutePath) {
-            val legacyFiles = legacyDir.walkTopDown().filter { it.isFile }.toList()
-            for (file in legacyFiles) {
-                val rel = file.relativeTo(legacyDir)
-                val dest = File(root, rel.path)
-                dest.parentFile?.mkdirs()
-                if (!dest.exists()) {
-                    file.copyTo(dest, overwrite = true)
+            try {
+                val legacyFiles = legacyDir.walkTopDown().filter { it.isFile }.toList()
+                for (file in legacyFiles) {
+                    val rel = file.relativeTo(legacyDir)
+                    val dest = File(root, rel.path)
+                    dest.parentFile?.mkdirs()
+                    if (!dest.exists()) {
+                        file.copyTo(dest, overwrite = true)
+                    }
                 }
+            } catch (e: Exception) {
+                // Ignore migration errors
             }
         }
 
-        val existingFiles = root.walkTopDown().filter { it.isFile && (it.extension == "md" || it.extension == "txt") }.toList()
+        // Check if markdown notes exist (ignoring hidden dot folders)
+        val existingFiles = root.walkTopDown()
+            .filter { file ->
+                file.isFile &&
+                (file.extension.equals("md", ignoreCase = true) || file.extension.equals("txt", ignoreCase = true)) &&
+                !file.relativeTo(root).path.split(File.separator).any { it.startsWith(".") }
+            }
+            .toList()
+
         if (existingFiles.isNotEmpty()) {
             syncFilesystemToDatabase()
             return@withContext
         }
 
-        // Create directory hierarchy
+        // Create directory hierarchy on /storage/emulated/0/Download/ObsidianVault
         val conceptsDir = File(root, "Concepts").apply { mkdirs() }
         val systemsDir = File(root, "Systems").apply { mkdirs() }
         val wikiDir = File(root, "Wiki").apply { mkdirs() }
@@ -69,7 +93,7 @@ class VaultFileSystemManager(
             """
             # Knowledge Graphs
             
-            #concepts #graphs #wiki
+            #concepts #graphs #wiki #knowledge
             
             A **Knowledge Graph** represents a network of real-world entities—objects, situations, concepts—and illustrates the relationship between them.
             
@@ -82,7 +106,7 @@ class VaultFileSystemManager(
             
             ## Synergies
             - Connects deeply with [[Venice AI]] for autonomous reasoning.
-            - Backed by our resilient [[Vault Architecture]].
+            - Backed by our resilient [[Vault Architecture]] directly on `/storage/emulated/0/Download/ObsidianVault`.
             """.trimIndent()
         )
 
@@ -90,7 +114,7 @@ class VaultFileSystemManager(
             """
             # Artificial Intelligence
             
-            #ai #intelligence #neural
+            #ai #intelligence #neural #reasoning
             
             Artificial Intelligence (AI) encompasses systems capable of performing cognitive tasks that previously required human agency, such as visual perception, synthesis, and dialectic reasoning.
             
@@ -108,7 +132,7 @@ class VaultFileSystemManager(
             """
             # Venice AI (Venice Unfiltered)
             
-            #philosophy #ai #venice #privacy
+            #philosophy #ai #venice #privacy #unfiltered
             
             > "Raw, Objective & Direct. Zero lecturing, straightforward answers, high signal-to-noise ratio."
             
@@ -127,13 +151,20 @@ class VaultFileSystemManager(
             """
             # Vault Architecture
             
-            #systems #architecture #filesystem #storage
+            #systems #architecture #filesystem #storage #database
             
-            The Obsidian Vault on Android implements a dual-layer storage topology:
+            The Obsidian Vault on Android implements a root-level storage topology directly on external storage:
             
-            1. **Physical Filesystem**: Source of truth stored as clean Markdown (`.md`) files in app-internal storage. Fully portable and user accessible.
-            2. **Room Database Cache**: Accelerated index for full-text queries, tag resolution, outlinks, and backlinks.
-            3. **Filesystem Synchronization**: Scans directory tree, digests file modification timestamps, parses `[[Wikilinks]]`, and reconciles graph edges.
+            ## Physical Storage Map
+            - **Vault Root**: `/storage/emulated/0/Download/ObsidianVault/`
+            - **Database**: `/storage/emulated/0/Download/ObsidianVault/.database/vault_storage.db`
+            - **Auth & Persona Config**: `/storage/emulated/0/Download/ObsidianVault/.auth/vault_auth_config.json`
+            - **Chat History**: `/storage/emulated/0/Download/ObsidianVault/.chat/chat_history.json`
+            - **Wiki & Notes**: `/storage/emulated/0/Download/ObsidianVault/Wiki/`
+            
+            ## Dual-Layer Persistence
+            1. **Physical Filesystem**: Source of truth stored as clean Markdown (`.md`) files on external storage. Accessible by any third-party markdown editor or file manager.
+            2. **Room Database**: High-speed indexing engine for graph traversal, tag filtering, and instant full-text lookups.
             
             ## Connected Subsystems
             - [[Semantic Search]]: Token indexing and vector similarity scoring.
@@ -172,7 +203,9 @@ class VaultFileSystemManager(
             - Headings with `# H1`, `## H2`, `### H3`
             - Wikilinks with `[[Target Note]]` or `[[Target Note|Custom Label]]`
             - Checklists:
-              - [x] Filesystem synchronization
+              - [x] External storage synchronization (`/storage/emulated/0/Download/ObsidianVault`)
+              - [x] Disk-backed SQLite Database (`.database/vault_storage.db`)
+              - [x] External Chat & Auth storage (`.chat/` & `.auth/`)
               - [x] Interactive Graph View
               - [ ] Expand your digital garden
             - Tags: e.g. `#concepts`, `#ai`, `#systems`
@@ -186,11 +219,13 @@ class VaultFileSystemManager(
             """
             # Daily Note - 2026-09-27
             
-            #daily #log #research
+            #daily #log #research #storage
             
-            - Initialized the Obsidian Vault on Android with filesystem ingestion.
+            - Configured full vault filesystem persistence in `/storage/emulated/0/Download/ObsidianVault`.
+            - Mounted Room SQLite database at `/storage/emulated/0/Download/ObsidianVault/.database/vault_storage.db`.
+            - Verified Auth config at `.auth/vault_auth_config.json` and Chat history at `.chat/chat_history.json`.
             - Tested [[Knowledge Graphs]] physics layout and node degree sizing.
-            - Configured [[Venice AI]] unfiltered persona for dialectic wiki queries.
+            - Enabled [[Venice AI]] unfiltered persona for dialectic wiki queries.
             - Verified bidirectional backlinks across [[Vault Architecture]] and [[Semantic Search]].
             """.trimIndent()
         )
@@ -200,8 +235,13 @@ class VaultFileSystemManager(
 
     suspend fun syncFilesystemToDatabase(): Int = withContext(Dispatchers.IO) {
         val root = vaultRoot
+        // Ignore dot folders (.database, .auth, .chat, .diagnostics)
         val mdFiles = root.walkTopDown()
-            .filter { it.isFile && (it.extension == "md" || it.extension == "txt") }
+            .filter { file ->
+                file.isFile &&
+                (file.extension.equals("md", ignoreCase = true) || file.extension.equals("txt", ignoreCase = true)) &&
+                !file.relativeTo(root).path.split(File.separator).any { it.startsWith(".") }
+            }
             .toList()
 
         val activePaths = mutableListOf<String>()
@@ -371,7 +411,14 @@ class VaultFileSystemManager(
     suspend fun refactorWikilinks(oldTitle: String, newTitle: String): Int = withContext(Dispatchers.IO) {
         val root = vaultRoot
         var modifiedCount = 0
-        val files = root.walkTopDown().filter { it.isFile && (it.extension == "md" || it.extension == "txt") }.toList()
+        val files = root.walkTopDown()
+            .filter { file ->
+                file.isFile &&
+                (file.extension == "md" || file.extension == "txt") &&
+                !file.relativeTo(root).path.split(File.separator).any { it.startsWith(".") }
+            }
+            .toList()
+
         val targetPattern1 = "\\[\\[${Regex.escape(oldTitle)}\\]\\]".toRegex(RegexOption.IGNORE_CASE)
         val targetPattern2 = "\\[\\[${Regex.escape(oldTitle)}\\|(.*)\\]\\]".toRegex(RegexOption.IGNORE_CASE)
 
@@ -417,12 +464,19 @@ class VaultFileSystemManager(
         val totalWords = notes.sumOf { it.content.split("\\s+".toRegex()).filter { w -> w.isNotBlank() }.size }
         val totalBytes = notes.sumOf { it.sizeBytes }
 
+        val dbFile = File(vaultRoot, ".database/vault_storage.db")
+        val authFile = File(vaultRoot, ".auth/vault_auth_config.json")
+        val chatFile = File(vaultRoot, ".chat/chat_history.json")
+
         buildString {
-            appendLine("### 🛠️ Obsidian Vault System Diagnostic")
-            appendLine("- **Storage Location**: `$vaultAbsolutePath`")
-            appendLine("- **Total Notes**: ${notes.size}")
-            appendLine("- **Total Word Count**: $totalWords words")
-            appendLine("- **Total Storage**: ${totalBytes / 1024} KB")
+            appendLine("### 🛠️ Obsidian Vault Storage Topology Audit")
+            appendLine("- 📂 **Vault Root**: `$vaultAbsolutePath`")
+            appendLine("- 🗄️ **SQLite DB**: `${dbFile.absolutePath}` (${if (dbFile.exists()) "${dbFile.length() / 1024} KB" else "Ready"})")
+            appendLine("- 🔐 **Auth & Persona Config**: `${authFile.absolutePath}` (${if (authFile.exists()) "Active" else "Default"})")
+            appendLine("- 💬 **Chat Persistence**: `${chatFile.absolutePath}` (${if (chatFile.exists()) "${chatFile.length()} bytes" else "Ready"})")
+            appendLine("- 📝 **Total Notes**: ${notes.size}")
+            appendLine("- 📖 **Total Word Count**: $totalWords words")
+            appendLine("- 💾 **Markdown Documents Footprint**: ${totalBytes / 1024} KB")
             appendLine()
             if (brokenLinks.isNotEmpty()) {
                 appendLine("#### ⚠️ Unresolved / Broken Wikilinks (${brokenLinks.size}):")
@@ -442,5 +496,27 @@ class VaultFileSystemManager(
                 appendLine("✅ **No orphaned notes detected.**")
             }
         }
+    }
+
+    suspend fun exportVaultZipArchive(): File = withContext(Dispatchers.IO) {
+        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val backupsDir = File(downloadDir, "ObsidianVault_Backups").apply { if (!exists()) mkdirs() }
+        val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val zipFile = File(backupsDir, "ObsidianVault_Backup_$dateStr.zip")
+
+        ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+            val root = vaultRoot
+            root.walkTopDown().filter { it.isFile }.forEach { file ->
+                val relPath = file.relativeTo(root).path
+                val entry = ZipEntry(relPath)
+                entry.time = file.lastModified()
+                zos.putNextEntry(entry)
+                FileInputStream(file).use { fis ->
+                    fis.copyTo(zos)
+                }
+                zos.closeEntry()
+            }
+        }
+        zipFile
     }
 }

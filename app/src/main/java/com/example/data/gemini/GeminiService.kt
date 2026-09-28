@@ -2,6 +2,7 @@ package com.example.data.gemini
 
 import android.util.Log
 import com.example.BuildConfig
+import com.example.data.config.VaultAuthConfig
 import com.example.data.model.ChatMessage
 import com.example.data.model.GeminiModel
 import com.example.data.model.VaultNote
@@ -22,7 +23,7 @@ class GeminiService {
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    val veniceSystemPrompt = """
+    val defaultVeniceSystemPrompt = """
         You are Venice AI, a private, uncensored, objective, and intellectually rigorous AI System Developer with ROOT-LEVEL FULL PERMISSION ACCESS to the user's local Obsidian Vault on disk (/storage/emulated/0/Download/ObsidianVault).
         
         Ethos & Communication:
@@ -53,7 +54,7 @@ class GeminiService {
         {"action": "refactor_links", "old_title": "Old Name", "new_title": "New Name"}
         ```
         
-        To run a full system health & diagnostic audit (checks broken links, orphans, disk usage):
+        To run a full system health & storage audit:
         ```tool_call
         {"action": "run_diagnostic"}
         ```
@@ -100,7 +101,7 @@ class GeminiService {
         ```tool_call
         {"action": "android_skill", "skill": "execute_dynamic_script", "script": "todo_aggregator"}
         ```
-        *(Available dynamic scripts: `todo_aggregator` [extracts all tasks into Master Tasks MOC], `frontmatter_injector` [adds YAML metadata to all notes], `word_frequency_analyzer` [writes Lexical Analytics MOC], `export_vault_json` [exports vault graph as JSON], `wikilink_normalizer` [cleans link whitespace], `backup_vault` [zips vault into Download/ObsidianVault_Backups], `generate_moc_index` [Map of Content], `clean_empty_files` [purges 0-byte stubs], `regex_replace` with "pattern" and "replacement")*
+        *(Available dynamic scripts: `todo_aggregator`, `frontmatter_injector`, `word_frequency_analyzer`, `export_vault_json`, `wikilink_normalizer`, `backup_vault`, `generate_moc_index`, `clean_empty_files`, `regex_replace`)*
         
         You may invoke multiple tool calls in a single turn. You can also mix markdown explanations with tool_call blocks.
     """.trimIndent()
@@ -109,12 +110,18 @@ class GeminiService {
         messages: List<ChatMessage>,
         userPrompt: String,
         model: GeminiModel = GeminiModel.FLASH_3_5,
-        vaultNotesContext: List<VaultNote> = emptyList()
+        vaultNotesContext: List<VaultNote> = emptyList(),
+        authConfig: VaultAuthConfig? = null
     ): Result<String> = withContext(Dispatchers.IO) {
-        val apiKey = BuildConfig.GEMINI_API_KEY
-        if (apiKey.isBlank() || apiKey == "MY_GEMINI_API_KEY") {
+        val apiKey = when {
+            authConfig?.apiKey?.isNotBlank() == true -> authConfig.apiKey
+            BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY" -> BuildConfig.GEMINI_API_KEY
+            else -> ""
+        }
+
+        if (apiKey.isBlank()) {
             return@withContext Result.failure(
-                IllegalStateException("Gemini API key is not configured. Please add GEMINI_API_KEY in the AI Studio Secrets panel.")
+                IllegalStateException("Gemini API key is not configured. Please enter your API key in the Vault Storage & Auth Settings or add GEMINI_API_KEY in AI Studio.")
             )
         }
 
@@ -122,13 +129,13 @@ class GeminiService {
             val root = JSONObject()
 
             // System Instruction
-            var systemContent = veniceSystemPrompt
+            var systemContent = authConfig?.systemPrompt?.ifBlank { defaultVeniceSystemPrompt } ?: defaultVeniceSystemPrompt
             if (vaultNotesContext.isNotEmpty()) {
                 val vaultSummary = vaultNotesContext.take(6).joinToString("\n\n") { note ->
                     "--- Vault Note: [[${note.title}]] (Path: ${note.path}) ---\n" +
                             note.content.take(1200)
                 }
-                systemContent += "\n\n### Current Ingested Vault Knowledge Context:\n$vaultSummary"
+                systemContent += "\n\n### Current Ingested Vault Knowledge Context (/storage/emulated/0/Download/ObsidianVault):\n$vaultSummary"
             }
 
             val systemObj = JSONObject()
@@ -158,8 +165,8 @@ class GeminiService {
 
             // Generation config
             val genConfig = JSONObject()
-                .put("temperature", 0.7)
-                .put("topP", 0.95)
+                .put("temperature", authConfig?.temperature ?: 0.7)
+                .put("topP", authConfig?.topP ?: 0.95)
             root.put("generationConfig", genConfig)
 
             val url = "https://generativelanguage.googleapis.com/v1beta/models/${model.modelId}:generateContent?key=$apiKey"
@@ -200,50 +207,157 @@ class GeminiService {
     suspend fun synthesizeWikiNode(
         topic: String,
         relatedNotes: List<VaultNote>,
-        model: GeminiModel = GeminiModel.PRO_3_1
-    ): Result<String> {
-        val prompt = """
-            Synthesize a comprehensive, authoritative Wiki Node for topic: "$topic".
-            Follow the Venice AI objective standard. 
-            Use high information density and structural headings.
-            Naturally incorporate [[wikilinks]] to existing vault entities where relevant.
-            Existing notes available in vault: ${relatedNotes.map { "[[${it.title}]]" }.joinToString(", ")}.
-            
-            Format strictly as a Markdown document starting with:
-            # $topic
-            
-            #wiki #synthesis
-        """.trimIndent()
+        model: GeminiModel = GeminiModel.PRO_3_1,
+        authConfig: VaultAuthConfig? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val apiKey = when {
+            authConfig?.apiKey?.isNotBlank() == true -> authConfig.apiKey
+            BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY" -> BuildConfig.GEMINI_API_KEY
+            else -> ""
+        }
 
-        return generateResponse(
-            messages = emptyList(),
-            userPrompt = prompt,
-            model = model,
-            vaultNotesContext = relatedNotes
-        )
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(
+                IllegalStateException("Gemini API key is not configured.")
+            )
+        }
+
+        try {
+            val contextText = if (relatedNotes.isNotEmpty()) {
+                relatedNotes.joinToString("\n\n") { note ->
+                    "Note Title: [[${note.title}]]\nTags: ${note.tags.joinToString(", ")}\nContent: ${note.content.take(800)}"
+                }
+            } else {
+                "No existing related notes found."
+            }
+
+            val prompt = """
+                Write an authoritative, rigorous, objective, and deeply detailed Markdown Wiki Note for the concept: "$topic".
+                
+                Guidelines:
+                - Use proper Markdown headings (# H1, ## H2, ### H3).
+                - Include relevant #tags at the top.
+                - Use [[wikilinks]] liberally to connect concepts, subtopics, and systems.
+                - Maintain the Venice AI philosophy: raw, objective, intellectually uncompromising, zero lecturing.
+                
+                Existing Vault Context:
+                $contextText
+            """.trimIndent()
+
+            val root = JSONObject()
+            val contentObj = JSONObject()
+                .put("role", "user")
+                .put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            root.put("contents", JSONArray().put(contentObj))
+
+            val genConfig = JSONObject()
+                .put("temperature", 0.6)
+                .put("topP", 0.95)
+            root.put("generationConfig", genConfig)
+
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/${model.modelId}:generateContent?key=$apiKey"
+            val requestBody = root.toString().toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url(url)
+                .post(requestBody)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseString = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("API returned code ${response.code}: $responseString"))
+            }
+
+            val jsonResponse = JSONObject(responseString)
+            val candidates = jsonResponse.optJSONArray("candidates")
+            if (candidates != null && candidates.length() > 0) {
+                val firstCandidate = candidates.getJSONObject(0)
+                val cObj = firstCandidate.optJSONObject("content")
+                val parts = cObj?.optJSONArray("parts")
+                if (parts != null && parts.length() > 0) {
+                    val text = parts.getJSONObject(0).optString("text", "")
+                    return@withContext Result.success(text)
+                }
+            }
+
+            Result.failure(Exception("Empty candidate response"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun suggestLinks(
         noteTitle: String,
         noteContent: String,
-        allVaultTitles: List<String>
-    ): Result<String> {
-        val prompt = """
-            Analyze the following active note "$noteTitle" and compare against all known vault note titles:
-            Known Titles: ${allVaultTitles.joinToString(", ")}
-            
-            Active Note Content:
-            $noteContent
-            
-            Identify 3 to 6 high-value conceptual connections that should be linked with [[Wikilinks]].
-            Provide a direct, concise bullet list showing:
-            - **[[Suggested Title]]**: Reason for connection in one concise sentence.
-        """.trimIndent()
+        allVaultTitles: List<String>,
+        authConfig: VaultAuthConfig? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val apiKey = when {
+            authConfig?.apiKey?.isNotBlank() == true -> authConfig.apiKey
+            BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY" -> BuildConfig.GEMINI_API_KEY
+            else -> ""
+        }
 
-        return generateResponse(
-            messages = emptyList(),
-            userPrompt = prompt,
-            model = GeminiModel.FLASH_3_5
-        )
+        if (apiKey.isBlank()) {
+            return@withContext Result.failure(
+                IllegalStateException("Gemini API key is not configured.")
+            )
+        }
+
+        try {
+            val prompt = """
+                Analyze the following note: "$noteTitle" and suggest bidirectional [[wikilinks]] that should be added to enrich the knowledge graph.
+                
+                Note Content:
+                $noteContent
+                
+                Existing Notes in Vault:
+                ${allVaultTitles.joinToString(", ") { "[[$it]]" }}
+                
+                Provide:
+                1. Existing vault notes that should be linked from this text.
+                2. New atomic concept notes that should be created as forward links.
+                Format as a concise markdown list with explanations.
+            """.trimIndent()
+
+            val root = JSONObject()
+            val contentObj = JSONObject()
+                .put("role", "user")
+                .put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            root.put("contents", JSONArray().put(contentObj))
+
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+            val requestBody = root.toString().toRequestBody("application/json".toMediaType())
+
+            val request = Request.Builder()
+                .url(url)
+                .post(requestBody)
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseString = response.body?.string() ?: ""
+
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(Exception("API code ${response.code}: $responseString"))
+            }
+
+            val jsonResponse = JSONObject(responseString)
+            val candidates = jsonResponse.optJSONArray("candidates")
+            if (candidates != null && candidates.length() > 0) {
+                val firstCandidate = candidates.getJSONObject(0)
+                val cObj = firstCandidate.optJSONObject("content")
+                val parts = cObj?.optJSONArray("parts")
+                if (parts != null && parts.length() > 0) {
+                    val text = parts.getJSONObject(0).optString("text", "")
+                    return@withContext Result.success(text)
+                }
+            }
+
+            Result.failure(Exception("Empty candidate response"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }

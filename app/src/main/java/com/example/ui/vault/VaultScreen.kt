@@ -42,6 +42,7 @@ fun VaultScreen(
     val chatMessages by viewModel.chatMessages.collectAsStateWithLifecycle()
     val isChatLoading by viewModel.isChatLoading.collectAsStateWithLifecycle()
     val chatModel by viewModel.chatModel.collectAsStateWithLifecycle()
+    val authConfig by viewModel.authConfig.collectAsStateWithLifecycle()
     val deviceTelemetry by viewModel.deviceTelemetry.collectAsStateWithLifecycle()
     val displayMetrics by viewModel.displayMetrics.collectAsStateWithLifecycle()
     val runtimeJvmInfo by viewModel.runtimeJvmInfo.collectAsStateWithLifecycle()
@@ -49,6 +50,7 @@ fun VaultScreen(
     val storageAudit by viewModel.storageAudit.collectAsStateWithLifecycle()
 
     var showAndroidSkillsDialog by remember { mutableStateOf(false) }
+    var showStorageAuthDialog by remember { mutableStateOf(false) }
 
     // Back handler: pop back to explorer if on another tab
     BackHandler(enabled = activeTab != VaultTab.EXPLORER) {
@@ -114,6 +116,19 @@ fun VaultScreen(
                             imageVector = Icons.Default.Hub,
                             contentDescription = "Graph View",
                             tint = if (activeTab == VaultTab.GRAPH) ObsidianPurpleLight else ObsidianTextSecondary
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            viewModel.loadStorageAudit()
+                            showStorageAuthDialog = true
+                        },
+                        modifier = Modifier.testTag("top_storage_auth_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderShared,
+                            contentDescription = "Vault Storage & Auth",
+                            tint = ObsidianPurpleLight
                         )
                     }
                     IconButton(
@@ -319,6 +334,21 @@ fun VaultScreen(
                 }
             }
         }
+    }
+
+    if (showStorageAuthDialog) {
+        VaultStorageAuthDialog(
+            authConfig = authConfig,
+            storageAudit = storageAudit,
+            vaultPath = viewModel.vaultAbsolutePath,
+            onDismiss = { showStorageAuthDialog = false },
+            onSaveApiKey = { key -> viewModel.saveApiKey(key) },
+            onSavePersona = { name, title, prompt, temp -> viewModel.savePersona(name, title, prompt, temp) },
+            onResyncStorage = { viewModel.syncFilesystem() },
+            onExportBackupZip = { viewModel.exportBackupZip() },
+            onClearChatHistory = { viewModel.clearChat() },
+            onExportChatMarkdown = { viewModel.exportChatMarkdown() }
+        )
     }
 
     if (showAndroidSkillsDialog) {

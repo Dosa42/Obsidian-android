@@ -3,6 +3,7 @@ package com.example.ui.vault
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.config.VaultAuthConfig
 import com.example.data.filesystem.VaultFileSystemManager
 import com.example.data.gemini.GeminiService
 import com.example.data.local.VaultDatabase
@@ -24,6 +25,7 @@ import com.example.data.skills.StorageAudit
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.io.File
 
 enum class VaultTab {
     EXPLORER,
@@ -38,6 +40,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val fileSystemManager = VaultFileSystemManager(application, database.vaultDao())
     private val repository = VaultRepository(database.vaultDao(), fileSystemManager, application)
     private val geminiService = GeminiService()
+
+    val authConfig: StateFlow<VaultAuthConfig> = repository.authConfig
 
     val allNotes: StateFlow<List<VaultNote>> = repository.allNotes
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -84,17 +88,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val _graphData = MutableStateFlow(VaultGraphData(emptyList(), emptyList()))
     val graphData: StateFlow<VaultGraphData> = _graphData.asStateFlow()
 
-    // LLM Wiki Chat
-    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(
-        listOf(
-            ChatMessage(
-                role = "model",
-                text = "**Venice AI Wiki Coprocessor initialized.**\n" +
-                        "Operating mode: *Raw, Objective & Direct*. High signal-to-noise ratio.\n" +
-                        "Ask questions about your vault documents, request concept synthesis with [[wikilinks]], or analyze semantic knowledge connections."
-            )
-        )
-    )
+    // LLM Wiki Chat - backed by .chat/chat_history.json
+    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
     private val _isChatLoading = MutableStateFlow(false)
@@ -114,6 +109,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             repository.initialize()
+            // Load chat history from /storage/emulated/0/Download/ObsidianVault/.chat/chat_history.json
+            val loadedChat = repository.loadChatHistory()
+            _chatMessages.value = loadedChat
             syncFilesystem()
         }
 
@@ -159,7 +157,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             if (existing != null) {
                 openNote(existing)
             } else {
-                // Auto create the note
+                // Auto create the note on filesystem
                 val newNote = repository.createNote(
                     title = title,
                     folder = "Root",
@@ -220,12 +218,12 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun syncFilesystem() {
         viewModelScope.launch {
             _isSyncing.value = true
-            _syncMessage.value = "Scanning filesystem and indexing vault..."
+            _syncMessage.value = "Indexing /storage/emulated/0/Download/ObsidianVault..."
             try {
                 val count = repository.syncVault()
-                _syncMessage.value = "Sync complete: $count notes indexed."
+                _syncMessage.value = "Storage synced: $count markdown notes indexed."
             } catch (e: Exception) {
-                _syncMessage.value = "Sync failed: ${e.message}"
+                _syncMessage.value = "Sync notice: ${e.message}"
             } finally {
                 _isSyncing.value = false
             }
@@ -252,15 +250,66 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         onSearchQueryChanged(_searchQuery.value)
     }
 
+    fun saveApiKey(apiKey: String) {
+        viewModelScope.launch {
+            val success = repository.updateApiKey(apiKey)
+            if (success) {
+                showToast("API Key saved to .auth/vault_auth_config.json")
+            } else {
+                showToast("Failed saving API Key to disk")
+            }
+        }
+    }
+
+    fun savePersona(name: String, title: String, prompt: String, temp: Double) {
+        viewModelScope.launch {
+            val success = repository.updatePersona(name, title, prompt, temp)
+            if (success) {
+                showToast("Persona saved to .auth/vault_auth_config.json")
+            } else {
+                showToast("Failed saving Persona to disk")
+            }
+        }
+    }
+
+    fun clearChat() {
+        viewModelScope.launch {
+            val resetList = repository.clearChatHistory()
+            _chatMessages.value = resetList
+            showToast("Chat history reset")
+        }
+    }
+
+    fun exportChatMarkdown() {
+        viewModelScope.launch {
+            val file = repository.exportChatToMarkdown(_chatMessages.value)
+            showToast("Exported transcript to ${file.name}")
+            syncFilesystem()
+        }
+    }
+
+    fun exportBackupZip() {
+        viewModelScope.launch {
+            try {
+                val zip = repository.exportVaultZip()
+                showToast("Backup created: ${zip.name}")
+            } catch (e: Exception) {
+                showToast("Backup failed: ${e.message}")
+            }
+        }
+    }
+
     fun sendChatMessage(userText: String, askVault: Boolean = false) {
         if (userText.isBlank()) return
         val userMsg = ChatMessage(role = "user", text = userText)
-        _chatMessages.value = _chatMessages.value + userMsg
+        val updatedList = _chatMessages.value + userMsg
+        _chatMessages.value = updatedList
         _isChatLoading.value = true
 
         viewModelScope.launch {
+            repository.saveChatHistory(updatedList)
+
             val contextNotes = if (askVault) {
-                // Find most semantically relevant notes to inject as RAG context
                 val results = repository.semanticSearch(userText, allNotes.value)
                 results.take(4).map { it.note }
             } else {
@@ -271,7 +320,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 messages = _chatMessages.value.filter { it.role != "system" },
                 userPrompt = userText,
                 model = _chatModel.value,
-                vaultNotesContext = contextNotes
+                vaultNotesContext = contextNotes,
+                authConfig = authConfig.value
             )
 
             result.onSuccess { reply ->
@@ -298,7 +348,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                         ToolExecutionResult(
                                             action = "create_note",
                                             target = title,
-                                            details = "Directly created/updated note in vault folder '$folder'"
+                                            details = "Saved markdown file to $vaultAbsolutePath/$folder"
                                         )
                                     )
                                 }
@@ -312,7 +362,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                         ToolExecutionResult(
                                             action = "update_note",
                                             target = title,
-                                            details = "Updated note contents on disk"
+                                            details = "Updated markdown file on disk"
                                         )
                                     )
                                 }
@@ -325,7 +375,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                         ToolExecutionResult(
                                             action = "delete_note",
                                             target = title,
-                                            details = if (deleted) "Deleted file from vault" else "Note not found in vault",
+                                            details = if (deleted) "Deleted file from $vaultAbsolutePath" else "Note not found in vault",
                                             success = deleted
                                         )
                                     )
@@ -339,7 +389,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                         ToolExecutionResult(
                                             action = "create_folder",
                                             target = folder,
-                                            details = "Directory created on filesystem"
+                                            details = "Created directory at $vaultAbsolutePath/$folder"
                                         )
                                     )
                                 }
@@ -353,7 +403,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                         ToolExecutionResult(
                                             action = "refactor_links",
                                             target = "$oldTitle ➔ $newTitle",
-                                            details = "Updated $count wikilink references across vault"
+                                            details = "Refactored $count files on external storage"
                                         )
                                     )
                                 }
@@ -363,7 +413,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                 executedTools.add(
                                     ToolExecutionResult(
                                         action = "run_diagnostic",
-                                        target = "System Diagnostic",
+                                        target = "Storage Diagnostic",
                                         details = diag
                                     )
                                 )
@@ -387,7 +437,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                             ToolExecutionResult(
                                                 action = "android_skill",
                                                 target = "Storage Audit",
-                                                details = "Vault: ${audit.totalFiles} files (${audit.totalSizeBytes / 1024} KB) | Partition Free: ${audit.freeSpaceBytes / (1024 * 1024 * 1024)} GB"
+                                                details = "Vault: ${audit.totalFiles} files (${audit.totalSizeBytes / 1024} KB) | Download Partition Free: ${audit.freeSpaceBytes / (1024 * 1024 * 1024)} GB"
                                             )
                                         )
                                     }
@@ -518,13 +568,17 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     citedNotes = cited,
                     executedTools = executedTools
                 )
-                _chatMessages.value = _chatMessages.value + modelMsg
+                val finalizedList = _chatMessages.value + modelMsg
+                _chatMessages.value = finalizedList
+                repository.saveChatHistory(finalizedList)
             }.onFailure { err ->
                 val errorMsg = ChatMessage(
                     role = "model",
-                    text = "⚠️ **Error communicating with Gemini (${_chatModel.value.displayName})**\n\n${err.message}\n\n*Make sure GEMINI_API_KEY is configured in the AI Studio Secrets panel.*"
+                    text = "⚠️ **Error communicating with Gemini (${_chatModel.value.displayName})**\n\n${err.message}\n\n*Configure your GEMINI_API_KEY in the Vault Storage & Auth Settings.*"
                 )
-                _chatMessages.value = _chatMessages.value + errorMsg
+                val finalizedList = _chatMessages.value + errorMsg
+                _chatMessages.value = finalizedList
+                repository.saveChatHistory(finalizedList)
             }
 
             _isChatLoading.value = false
@@ -546,7 +600,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
             )
-            _chatMessages.value = _chatMessages.value + diagMsg
+            val updated = _chatMessages.value + diagMsg
+            _chatMessages.value = updated
+            repository.saveChatHistory(updated)
             _isChatLoading.value = false
         }
     }
@@ -554,12 +610,14 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun synthesizeWikiTopic(topic: String) {
         if (topic.isBlank()) return
         val userMsg = ChatMessage(role = "user", text = "Synthesize an authoritative Wiki Node for: **$topic**")
-        _chatMessages.value = _chatMessages.value + userMsg
+        val withUser = _chatMessages.value + userMsg
+        _chatMessages.value = withUser
         _isChatLoading.value = true
 
         viewModelScope.launch {
+            repository.saveChatHistory(withUser)
             val relatedNotes = repository.semanticSearch(topic, allNotes.value).map { it.note }
-            val result = geminiService.synthesizeWikiNode(topic, relatedNotes, _chatModel.value)
+            val result = geminiService.synthesizeWikiNode(topic, relatedNotes, _chatModel.value, authConfig.value)
 
             result.onSuccess { article ->
                 val modelMsg = ChatMessage(
@@ -568,13 +626,17 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     citedNotes = relatedNotes.map { it.title },
                     isSynthesizing = true
                 )
-                _chatMessages.value = _chatMessages.value + modelMsg
+                val updated = _chatMessages.value + modelMsg
+                _chatMessages.value = updated
+                repository.saveChatHistory(updated)
             }.onFailure { err ->
                 val errorMsg = ChatMessage(
                     role = "model",
                     text = "⚠️ **Synthesis failed**: ${err.message}"
                 )
-                _chatMessages.value = _chatMessages.value + errorMsg
+                val updated = _chatMessages.value + errorMsg
+                _chatMessages.value = updated
+                repository.saveChatHistory(updated)
             }
             _isChatLoading.value = false
         }
@@ -586,24 +648,30 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         _activeTab.value = VaultTab.WIKI
 
         val promptMsg = ChatMessage(role = "user", text = "Suggest semantic [[wikilinks]] for note: **${current.title}**")
-        _chatMessages.value = _chatMessages.value + promptMsg
+        val withUser = _chatMessages.value + promptMsg
+        _chatMessages.value = withUser
 
         viewModelScope.launch {
+            repository.saveChatHistory(withUser)
             val allTitles = allNotes.value.map { it.title }
-            val result = geminiService.suggestLinks(current.title, current.content, allTitles)
+            val result = geminiService.suggestLinks(current.title, current.content, allTitles, authConfig.value)
 
             result.onSuccess { suggestions ->
                 val modelMsg = ChatMessage(
                     role = "model",
                     text = suggestions
                 )
-                _chatMessages.value = _chatMessages.value + modelMsg
+                val updated = _chatMessages.value + modelMsg
+                _chatMessages.value = updated
+                repository.saveChatHistory(updated)
             }.onFailure { err ->
                 val errorMsg = ChatMessage(
                     role = "model",
                     text = "⚠️ **Link suggestion failed**: ${err.message}"
                 )
-                _chatMessages.value = _chatMessages.value + errorMsg
+                val updated = _chatMessages.value + errorMsg
+                _chatMessages.value = updated
+                repository.saveChatHistory(updated)
             }
             _isChatLoading.value = false
         }
@@ -663,7 +731,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
             )
-            _chatMessages.value = _chatMessages.value + msg
+            val updated = _chatMessages.value + msg
+            _chatMessages.value = updated
+            repository.saveChatHistory(updated)
             if (hookName in listOf("generate_moc_index", "clean_empty_files")) {
                 repository.syncVault()
             }
@@ -719,7 +789,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
             )
-            _chatMessages.value = _chatMessages.value + msg
+            val updated = _chatMessages.value + msg
+            _chatMessages.value = updated
+            repository.saveChatHistory(updated)
             repository.syncVault()
             _isChatLoading.value = false
         }
