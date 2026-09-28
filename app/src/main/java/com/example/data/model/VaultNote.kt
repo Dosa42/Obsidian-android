@@ -25,6 +25,13 @@ data class FolderNode(
     val notes: MutableList<VaultNote> = mutableListOf()
 )
 
+enum class GraphNodeType {
+    NOTE,
+    UNRESOLVED,
+    TAG,
+    ATTACHMENT
+}
+
 data class GraphNode(
     val id: String,
     val title: String,
@@ -33,12 +40,17 @@ data class GraphNode(
     var x: Float = 0f,
     var y: Float = 0f,
     var vx: Float = 0f,
-    var vy: Float = 0f
+    var vy: Float = 0f,
+    val path: String = "",
+    val nodeType: GraphNodeType = GraphNodeType.NOTE,
+    val tags: List<String> = emptyList(),
+    var isPinned: Boolean = false
 )
 
 data class GraphEdge(
     val sourceId: String,
-    val targetId: String
+    val targetId: String,
+    val isResolved: Boolean = true
 )
 
 data class BacklinkItem(

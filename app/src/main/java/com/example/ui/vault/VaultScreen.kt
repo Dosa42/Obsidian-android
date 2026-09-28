@@ -315,7 +315,11 @@ fun VaultScreen(
                     GraphView(
                         graphData = graphData,
                         allNotes = allNotes,
-                        onOpenNote = { viewModel.openNote(it) }
+                        activeNote = activeNote,
+                        hardwareState = hardwareState,
+                        onOpenNote = { viewModel.openNote(it) },
+                        onOpenNoteByTitle = { viewModel.openNoteByTitle(it) },
+                        onSavePositions = { viewModel.saveGraphNodePositions(it) }
                     )
                 }
                 VaultTab.SEARCH -> {

@@ -166,6 +166,52 @@ class AndroidBridge(
     }
 
     @JavascriptInterface
+    fun getNativeSessionJson(): String {
+        val session = chatGPTAuthManager.sessionState.value ?: chatGPTAuthManager.loadSessionFromDisk()
+        return if (session != null && session.isValid) {
+            JSONObject().apply {
+                put("accessToken", session.accessToken)
+                put("refreshToken", session.refreshToken)
+                put("idToken", session.idToken)
+                put("accountId", session.accountId)
+                put("email", session.email)
+                put("clientId", session.clientId)
+                put("expiresAt", session.expiresAt)
+                put("refreshedAt", session.refreshedAt)
+            }.toString()
+        } else {
+            ""
+        }
+    }
+
+    @JavascriptInterface
+    fun saveNativeSession(sessionJsonStr: String) {
+        try {
+            if (sessionJsonStr.isNotBlank()) {
+                val json = JSONObject(sessionJsonStr)
+                val session = com.example.data.auth.ChatGPTSession(
+                    accessToken = json.optString("accessToken", ""),
+                    refreshToken = json.optString("refreshToken", ""),
+                    idToken = json.optString("idToken", ""),
+                    accountId = json.optString("accountId", ""),
+                    email = json.optString("email", ""),
+                    clientId = json.optString("clientId", ChatGPTAuthManager.PUBLIC_CLIENT_ID),
+                    expiresAt = json.optLong("expiresAt", 0L),
+                    refreshedAt = json.optLong("refreshedAt", System.currentTimeMillis())
+                )
+                chatGPTAuthManager.saveSessionToDisk(session)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed saving native session from bridge", e)
+        }
+    }
+
+    @JavascriptInterface
+    fun clearNativeSession() {
+        chatGPTAuthManager.clearSession()
+    }
+
+    @JavascriptInterface
     fun stopLoopbackServer() {
         chatGPTAuthManager.stopLoopbackServer()
     }

@@ -604,18 +604,21 @@ class ChatGPTAuthManager(
             inputList.put(msgObj)
         }
 
-        // Add user prompt
-        inputList.put(JSONObject().apply {
-            put("type", "message")
-            put("role", "user")
-            val contentArr = JSONArray().apply {
-                put(JSONObject().apply {
-                    put("type", "input_text")
-                    put("text", userPrompt)
-                })
-            }
-            put("content", contentArr)
-        })
+        // Add user prompt only if not already present as the last message in history
+        val lastMsg = messages.lastOrNull()
+        if (lastMsg == null || lastMsg.role != "user" || lastMsg.text != userPrompt) {
+            inputList.put(JSONObject().apply {
+                put("type", "message")
+                put("role", "user")
+                val contentArr = JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("type", "input_text")
+                        put("text", userPrompt)
+                    })
+                }
+                put("content", contentArr)
+            })
+        }
 
         val payload = JSONObject().apply {
             put("model", model)

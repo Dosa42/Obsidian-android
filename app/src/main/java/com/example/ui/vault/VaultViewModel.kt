@@ -457,14 +457,33 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                         contextBudget = hardwareState.value.dynamicContextBudget
                     )
                     try {
+                        val streamMsgId = "msg_${System.currentTimeMillis()}_live"
+                        val initialPlaceholder = ChatMessage(
+                            id = streamMsgId,
+                            role = "model",
+                            text = "",
+                            citedNotes = contextNotes.map { it.title }
+                        )
+                        _chatMessages.value = _chatMessages.value + initialPlaceholder
+                        val streamBuffer = StringBuilder()
+
                         val reply = chatGPTAuthManager.streamResponses(
                             model = _selectedChatGPTModel.value,
-                            messages = _chatMessages.value.filter { it.role != "system" },
+                            messages = _chatMessages.value.filter { it.role != "system" && it.id != streamMsgId },
                             userPrompt = userText,
                             systemInstructions = systemInst,
-                            onChunk = {},
+                            onChunk = { chunk ->
+                                streamBuffer.append(chunk)
+                                val currentText = streamBuffer.toString().replace(Regex("```tool_call[\\s\\S]*?```"), "").trim()
+                                _chatMessages.value = _chatMessages.value.map { m ->
+                                    if (m.id == streamMsgId) m.copy(text = if (currentText.isNotBlank()) currentText else "Executing...") else m
+                                }
+                            },
                             onStatus = {}
                         )
+
+                        // Remove placeholder so that onSuccess can finalize cleanly
+                        _chatMessages.value = _chatMessages.value.filter { it.id != streamMsgId }
                         Result.success(reply)
                     } catch (e: Exception) {
                         Result.failure(e)
@@ -1007,5 +1026,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun signOutOfChatGPT() {
         chatGPTAuthManager.clearSession()
+    }
+
+    fun saveGraphNodePositions(positions: Map<String, Pair<Float, Float>>) {
+        repository.updateCachedNodePositions(positions)
     }
 }

@@ -14,6 +14,7 @@ val ObsidianPurpleContainer = Color(0xFF2A1E4A)
 val ObsidianPurpleGlow = Color(0x337B5BF2)
 
 val ObsidianTeal = Color(0xFF56B6C2)
+val ObsidianCyan = Color(0xFF06B6D4)
 val ObsidianGreen = Color(0xFF98C379)
 val ObsidianYellow = Color(0xFFE5C07B)
 val ObsidianRed = Color(0xFFE06C75)

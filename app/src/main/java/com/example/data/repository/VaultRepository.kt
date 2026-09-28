@@ -10,6 +10,7 @@ import com.example.data.model.BacklinkItem
 import com.example.data.model.ChatMessage
 import com.example.data.model.GraphEdge
 import com.example.data.model.GraphNode
+import com.example.data.model.GraphNodeType
 import com.example.data.model.VaultNote
 import com.example.data.scripts.DynamicScriptRule
 import com.example.data.scripts.ScriptExecutionSummary
@@ -277,43 +278,175 @@ class VaultRepository(
         Pair(linkedMentions, unlinkedMentions)
     }
 
-    // Build Graph Data
-    fun buildGraph(allNotes: List<VaultNote>): VaultGraphData {
+    private val nodePositionCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Float, Float>>()
+
+    fun updateCachedNodePositions(positions: Map<String, Pair<Float, Float>>) {
+        nodePositionCache.putAll(positions)
+    }
+
+    // Build Graph Data with stable IDs, unresolved links, tags, and cached coordinates
+    fun buildGraph(
+        allNotes: List<VaultNote>,
+        includeUnresolved: Boolean = true,
+        includeTags: Boolean = true
+    ): VaultGraphData {
+        // Fast lookups for note resolution by path and title
+        val pathToNote = allNotes.associateBy { it.path.lowercase() }
         val titleToNote = allNotes.associateBy { it.title.lowercase() }
+
         val degrees = mutableMapOf<String, Int>()
         val edges = mutableListOf<GraphEdge>()
+        val unresolvedNodesMap = mutableMapOf<String, GraphNode>()
+        val tagNodesMap = mutableMapOf<String, GraphNode>()
 
-        // Initialize degree count
-        allNotes.forEach { degrees[it.title] = 0 }
-
+        // 1. Process all notes and edges
         for (note in allNotes) {
+            val sourceId = note.path.ifBlank { note.title }
+            degrees.putIfAbsent(sourceId, 0)
+
             for (outlink in note.outlinks) {
-                val targetKey = outlink.lowercase()
-                val targetNote = titleToNote[targetKey]
+                val cleanLink = outlink.trim()
+                if (cleanLink.isBlank()) continue
+
+                val targetKey = cleanLink.lowercase()
+                val targetNote = pathToNote[targetKey]
+                    ?: pathToNote["$targetKey.md"]
+                    ?: titleToNote[targetKey]
+
                 if (targetNote != null) {
-                    edges.add(GraphEdge(sourceId = note.title, targetId = targetNote.title))
-                    degrees[note.title] = (degrees[note.title] ?: 0) + 1
-                    degrees[targetNote.title] = (degrees[targetNote.title] ?: 0) + 1
+                    val targetId = targetNote.path.ifBlank { targetNote.title }
+                    edges.add(GraphEdge(sourceId = sourceId, targetId = targetId, isResolved = true))
+                    degrees[sourceId] = (degrees[sourceId] ?: 0) + 1
+                    degrees[targetId] = (degrees[targetId] ?: 0) + 1
+                } else if (includeUnresolved) {
+                    val unresolvedId = "unresolved:$cleanLink"
+                    edges.add(GraphEdge(sourceId = sourceId, targetId = unresolvedId, isResolved = false))
+                    degrees[sourceId] = (degrees[sourceId] ?: 0) + 1
+                    degrees[unresolvedId] = (degrees[unresolvedId] ?: 0) + 1
+
+                    if (!unresolvedNodesMap.containsKey(unresolvedId)) {
+                        unresolvedNodesMap[unresolvedId] = GraphNode(
+                            id = unresolvedId,
+                            title = cleanLink,
+                            folder = "Unresolved",
+                            nodeType = GraphNodeType.UNRESOLVED,
+                            path = cleanLink
+                        )
+                    }
+                }
+            }
+
+            // Optional Tag nodes and edges
+            if (includeTags) {
+                for (tag in note.tags) {
+                    val cleanTag = tag.removePrefix("#").trim()
+                    if (cleanTag.isBlank()) continue
+                    val tagId = "tag:#$cleanTag"
+                    edges.add(GraphEdge(sourceId = sourceId, targetId = tagId, isResolved = true))
+                    degrees[sourceId] = (degrees[sourceId] ?: 0) + 1
+                    degrees[tagId] = (degrees[tagId] ?: 0) + 1
+
+                    if (!tagNodesMap.containsKey(tagId)) {
+                        tagNodesMap[tagId] = GraphNode(
+                            id = tagId,
+                            title = "#$cleanTag",
+                            folder = "Tags",
+                            nodeType = GraphNodeType.TAG,
+                            path = cleanTag
+                        )
+                    }
                 }
             }
         }
 
-        // Generate circular initial distribution
-        val count = allNotes.size
-        val radius = 320f
-        val nodes = allNotes.mapIndexed { index, note ->
-            val angle = (index.toDouble() / count.coerceAtLeast(1)) * 2 * Math.PI
-            val deg = degrees[note.title] ?: 0
-            GraphNode(
-                id = note.title,
-                title = note.title,
-                folder = note.folder,
-                degree = deg,
-                x = (Math.cos(angle) * (radius + (index % 3) * 60)).toFloat(),
-                y = (Math.sin(angle) * (radius + (index % 3) * 60)).toFloat()
+        // 2. Assemble note nodes
+        val allNodesList = mutableListOf<GraphNode>()
+        val totalExpected = allNotes.size + unresolvedNodesMap.size + tagNodesMap.size
+        val goldenAngle = 2.39996322972865332 // Math.PI * (3.0 - Math.sqrt(5.0))
+        var placeIndex = 0
+
+        for (note in allNotes) {
+            val nodeId = note.path.ifBlank { note.title }
+            val deg = degrees[nodeId] ?: 0
+            val cachedPos = nodePositionCache[nodeId]
+
+            val (initX, initY) = if (cachedPos != null) {
+                cachedPos
+            } else {
+                val radius = 90f + Math.sqrt(placeIndex.toDouble()).toFloat() * 75f
+                val theta = (placeIndex * goldenAngle).toFloat()
+                val x = (Math.cos(theta.toDouble()) * radius).toFloat()
+                val y = (Math.sin(theta.toDouble()) * radius).toFloat()
+                nodePositionCache[nodeId] = Pair(x, y)
+                Pair(x, y)
+            }
+            placeIndex++
+
+            allNodesList.add(
+                GraphNode(
+                    id = nodeId,
+                    title = note.title,
+                    folder = note.folder,
+                    degree = deg,
+                    x = initX,
+                    y = initY,
+                    path = note.path,
+                    nodeType = GraphNodeType.NOTE,
+                    tags = note.tags
+                )
             )
         }
 
-        return VaultGraphData(nodes, edges)
+        // 3. Assemble unresolved nodes
+        for ((uId, uNode) in unresolvedNodesMap) {
+            val deg = degrees[uId] ?: 0
+            val cachedPos = nodePositionCache[uId]
+            val (initX, initY) = if (cachedPos != null) {
+                cachedPos
+            } else {
+                val radius = 120f + Math.sqrt(placeIndex.toDouble()).toFloat() * 80f
+                val theta = (placeIndex * goldenAngle).toFloat()
+                val x = (Math.cos(theta.toDouble()) * radius).toFloat()
+                val y = (Math.sin(theta.toDouble()) * radius).toFloat()
+                nodePositionCache[uId] = Pair(x, y)
+                Pair(x, y)
+            }
+            placeIndex++
+
+            allNodesList.add(
+                uNode.copy(
+                    degree = deg,
+                    x = initX,
+                    y = initY
+                )
+            )
+        }
+
+        // 4. Assemble tag nodes
+        for ((tId, tNode) in tagNodesMap) {
+            val deg = degrees[tId] ?: 0
+            val cachedPos = nodePositionCache[tId]
+            val (initX, initY) = if (cachedPos != null) {
+                cachedPos
+            } else {
+                val radius = 100f + Math.sqrt(placeIndex.toDouble()).toFloat() * 70f
+                val theta = (placeIndex * goldenAngle).toFloat()
+                val x = (Math.cos(theta.toDouble()) * radius).toFloat()
+                val y = (Math.sin(theta.toDouble()) * radius).toFloat()
+                nodePositionCache[tId] = Pair(x, y)
+                Pair(x, y)
+            }
+            placeIndex++
+
+            allNodesList.add(
+                tNode.copy(
+                    degree = deg,
+                    x = initX,
+                    y = initY
+                )
+            )
+        }
+
+        return VaultGraphData(allNodesList, edges)
     }
 }
