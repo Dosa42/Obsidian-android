@@ -1,5 +1,6 @@
 package com.example.data.scripts
 
+import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -29,8 +30,9 @@ data class ScriptExecutionSummary(
     val success: Boolean = true
 )
 
-class DynamicRuleEngine {
+class DynamicRuleEngine(private val context: Context? = null) {
     private val TAG = "DynamicRuleEngine"
+    private val jsEngine: AndroidJsEngine? = context?.let { AndroidJsEngine(it) }
 
     fun loadAllScripts(scriptsDir: File): List<DynamicScriptRule> {
         if (!scriptsDir.exists()) {
@@ -57,14 +59,19 @@ class DynamicRuleEngine {
                             rawJson = content
                         )
                     )
-                } else {
-                    // JavaScript / Plain text plugin
+                } else if (file.extension.equals("js", ignoreCase = true)) {
+                    // JavaScript plugin with dynamic trigger metadata in header or default
+                    val trigger = if (content.contains("@trigger on_vault_scan")) "on_vault_scan"
+                    else if (content.contains("@trigger on_note_saved")) "on_note_saved"
+                    else "manual"
+
                     rules.add(
                         DynamicScriptRule(
                             id = file.nameWithoutExtension,
-                            name = file.nameWithoutExtension.replace("_", " ").capitalize(Locale.ROOT),
-                            trigger = "manual",
-                            description = "Custom JS/text script in ${file.name}",
+                            name = file.nameWithoutExtension.replace("_", " ").split(" ")
+                                .joinToString(" ") { it.replaceFirstChar { char -> char.uppercase() } },
+                            trigger = trigger,
+                            description = "Custom JavaScript Engine Plugin: ${file.name}",
                             filePath = file.absolutePath,
                             isEnabled = true,
                             rawJson = content
@@ -85,7 +92,7 @@ class DynamicRuleEngine {
     ): String = withContext(Dispatchers.IO) {
         try {
             if (!noteFile.exists()) return@withContext "Note file ${noteFile.name} does not exist."
-            var originalContent = noteFile.readText()
+            val originalContent = noteFile.readText()
             var modifiedContent = originalContent
 
             if (rule.filePath.endsWith(".json", ignoreCase = true)) {
@@ -102,9 +109,13 @@ class DynamicRuleEngine {
                         modifiedContent = applyAction(action, modifiedContent, noteFile, vaultDir)
                     }
                 }
-            } else {
-                // JS / Script fallback runner: Simple JS-like AST rules
-                modifiedContent = executeCustomJsTransform(rule.rawJson, originalContent, noteFile)
+            } else if (rule.filePath.endsWith(".js", ignoreCase = true)) {
+                // Execute via Android JavaScript Runtime
+                modifiedContent = if (jsEngine != null) {
+                    jsEngine.executeScript(rule.rawJson, originalContent, noteFile)
+                } else {
+                    executeCustomJsTransform(rule.rawJson, originalContent, noteFile)
+                }
             }
 
             if (modifiedContent != originalContent) {
@@ -147,8 +158,12 @@ class DynamicRuleEngine {
                             }
                         }
                     }
-                } else {
-                    modified = executeCustomJsTransform(rule.rawJson, original, file)
+                } else if (rule.filePath.endsWith(".js", ignoreCase = true)) {
+                    modified = if (jsEngine != null) {
+                        jsEngine.executeScript(rule.rawJson, original, file)
+                    } else {
+                        executeCustomJsTransform(rule.rawJson, original, file)
+                    }
                 }
 
                 if (modified != original) {
@@ -168,6 +183,17 @@ class DynamicRuleEngine {
             details = if (modifiedCount > 0) logDetails.take(5).joinToString(", ") + if (logDetails.size > 5) " and ${logDetails.size - 5} more" else "" else "No files required mutation.",
             success = true
         )
+    }
+
+    suspend fun executeTrigger(trigger: String, vaultDir: File, scriptsDir: File): List<ScriptExecutionSummary> = withContext(Dispatchers.IO) {
+        val allRules = loadAllScripts(scriptsDir)
+        val matching = allRules.filter { it.trigger.equals(trigger, ignoreCase = true) && it.isEnabled }
+        val summaries = mutableListOf<ScriptExecutionSummary>()
+        for (rule in matching) {
+            val summary = executeRuleAcrossVault(rule, vaultDir)
+            summaries.add(summary)
+        }
+        summaries
     }
 
     private fun evaluateConditions(conditions: JSONArray?, content: String, file: File): Boolean {
@@ -296,7 +322,6 @@ class DynamicRuleEngine {
     }
 
     private fun executeCustomJsTransform(scriptCode: String, content: String, file: File): String {
-        // Execute simple JS-style AST / string transformations
         var transformed = content
         if (scriptCode.contains("replace(") || scriptCode.contains(".replace")) {
             val replaceRegex = """\.replace\(\s*/([^/]+)/([gimsuy]*)\s*,\s*["'](.*?)["']\s*\)""".toRegex()
@@ -348,21 +373,10 @@ class DynamicRuleEngine {
                   "id": "concept_auto_linker",
                   "name": "Concept Auto-Linker",
                   "trigger": "on_vault_scan",
-                  "description": "Discovers unlinked mentions of core concepts and converts them to bidirectional wikilinks",
-                  "conditions": [
-                    { "type": "min_word_count", "value": 30 }
-                  ],
+                  "description": "Automatically wikilinks concept keywords across all vault notes during sync",
+                  "conditions": [],
                   "actions": [
-                    {
-                      "type": "auto_wikilink_keywords",
-                      "keywords": [
-                        "Knowledge Graphs",
-                        "Venice AI",
-                        "Vault Architecture",
-                        "Semantic Search",
-                        "Artificial Intelligence"
-                      ]
-                    }
+                    { "type": "auto_wikilink_keywords", "keywords": ["Knowledge Graphs", "Wikilinks", "Obsidian Vault", "Venice AI"] }
                   ]
                 }
                 """.trimIndent()
@@ -375,25 +389,41 @@ class DynamicRuleEngine {
                 """
                 {
                   "id": "task_normalizer",
-                  "name": "Task & Checklist Normalizer",
-                  "trigger": "manual",
-                  "description": "Standardizes raw TODO text into Obsidian markdown checklists (- [ ])",
+                  "name": "Markdown Task Normalizer",
+                  "trigger": "on_note_saved",
+                  "description": "Normalizes custom markdown checkboxes to standard format",
+                  "conditions": [
+                    { "type": "contains_regex", "pattern": "\\[ \\]" }
+                  ],
                   "actions": [
-                    { "type": "replace_regex", "pattern": "(?i)^TODO:\\s*", "replacement": "- [ ] " },
-                    { "type": "replace_regex", "pattern": "(?i)^DONE:\\s*", "replacement": "- [x] " }
+                    { "type": "append_tag", "tag": "#tasks" }
                   ]
                 }
                 """.trimIndent()
             )
         }
 
-        val jsPlugin = File(scriptsDir, "format_cleaner.js")
-        if (!jsPlugin.exists()) {
-            jsPlugin.writeText(
+        val jsScript = File(scriptsDir, "custom_markdown_formatter.js")
+        if (!jsScript.exists()) {
+            jsScript.writeText(
                 """
-                // Dynamic JavaScript/AST Plugin: Format Cleaner
-                // Strips excessive blank lines and cleans double-spaces
-                content.replace(/\n{3,}/g, "\n\n");
+                // @trigger on_note_saved
+                // JavaScript Engine Plugin for Obsidian Vault
+                // This function is evaluated dynamically using Android's headless JS Runtime.
+                
+                function transform(content, title, folder, tags) {
+                    var modified = content;
+                    
+                    // Normalize multiple trailing newlines
+                    modified = modified.replace(/\n{3,}/g, '\n\n');
+                    
+                    // Clean trailing whitespace on every line
+                    modified = modified.split('\n').map(function(line) {
+                        return line.trimEnd();
+                    }).join('\n');
+                    
+                    return modified;
+                }
                 """.trimIndent()
             )
         }

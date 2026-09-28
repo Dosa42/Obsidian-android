@@ -332,17 +332,29 @@ fun WikiChatView(
                 QuickToolPill("🗄️ Storage Audit") {
                     onSendMessage("Audit the Obsidian Vault filesystem and database health.", false)
                 }
+                QuickToolPill("📱 Sensors") {
+                    onSendMessage("Execute tool_call: get_hardware_sensors to inspect phone hardware.", false)
+                }
+                QuickToolPill("📊 JVM Heap") {
+                    onSendMessage("Execute tool_call: get_runtime_jvm to inspect thread count and memory.", false)
+                }
+                QuickToolPill("📐 Display Metrics") {
+                    onSendMessage("Execute tool_call: get_display_metrics to inspect screen DPI and size.", false)
+                }
+                QuickToolPill("📎 Read Clipboard") {
+                    onSendMessage("Execute tool_call: clipboard_read to read the current system clipboard text.", false)
+                }
+                QuickToolPill("📚 Android Architecture") {
+                    onSendMessage("Query android knowledge for scoped_storage and explain it concisely.", false)
+                }
                 QuickToolPill("📝 Create Note") {
                     onSendMessage("Create a new note titled 'Cognitive Architecture' in folder 'Concepts' with relevant wikilinks and tags.", false)
                 }
                 QuickToolPill("🗺️ Generate MOC") {
                     onSendMessage("Execute dynamic script generate_moc_index to create a Map of Content.", false)
                 }
-                QuickToolPill("📱 Sensors") {
-                    onSendMessage("Execute tool_call: get_hardware_sensors to inspect phone hardware.", false)
-                }
-                QuickToolPill("📊 JVM Heap") {
-                    onSendMessage("Execute tool_call: get_runtime_jvm to inspect thread count and memory.", false)
+                QuickToolPill("✨ Auto-Tag") {
+                    onSendMessage("Execute dynamic script auto_tagger to organize meeting and action notes.", false)
                 }
             }
         }

@@ -45,7 +45,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val geminiService = GeminiService()
 
     private val fileObserverManager = VaultFileObserverManager(fileSystemManager.vaultRoot, viewModelScope)
+    private val adaptiveHardwareManager = com.example.data.adaptive.AdaptiveHardwareManager(application, viewModelScope)
 
+    val hardwareState: StateFlow<com.example.data.adaptive.HardwareContextState> = adaptiveHardwareManager.hardwareState
     val authConfig: StateFlow<VaultAuthConfig> = repository.authConfig
 
     val allNotes: StateFlow<List<VaultNote>> = repository.allNotes
@@ -124,8 +126,22 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             refreshDynamicScripts()
             syncFilesystem()
 
-            // Start inotify FileObserver monitoring
+            // Start inotify FileObserver monitoring and Adaptive Hardware Monitor
             fileObserverManager.startWatching()
+            adaptiveHardwareManager.startMonitoring()
+        }
+
+        // Collect adaptive hardware telemetry to self-tune model tiering
+        viewModelScope.launch {
+            hardwareState.collect { hwState ->
+                if (_chatModel.value == GeminiModel.FLASH_3_5 || _chatModel.value == GeminiModel.FLASH_LITE || _chatModel.value == GeminiModel.PRO_3_1) {
+                    _chatModel.value = when (hwState.recommendedModel) {
+                        "gemini-3.1-pro" -> GeminiModel.PRO_3_1
+                        "gemini-3.1-flash-lite-preview", "gemini-2.5-flash" -> GeminiModel.FLASH_LITE
+                        else -> GeminiModel.FLASH_3_5
+                    }
+                }
+            }
         }
 
         // Collect inotify file observer events for real-time hot-reloading
@@ -166,6 +182,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         fileObserverManager.stopWatching()
+        adaptiveHardwareManager.stopMonitoring()
     }
 
     fun refreshDynamicScripts() {
@@ -384,11 +401,42 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 emptyList()
             }
 
+            val currentActiveView = when (_activeTab.value) {
+                VaultTab.GRAPH -> com.example.data.gemini.ActiveViewContext(
+                    viewType = "GRAPH",
+                    totalNodesCount = _graphData.value.nodes.size,
+                    totalEdgesCount = _graphData.value.edges.size,
+                    topHubNotes = _graphData.value.nodes.sortedByDescending { it.degree }.take(5).map { it.title }
+                )
+                VaultTab.EDITOR -> com.example.data.gemini.ActiveViewContext(
+                    viewType = "EDITOR",
+                    activeNote = _activeNote.value,
+                    linkedMentions = _linkedMentions.value,
+                    unlinkedMentions = _unlinkedMentions.value
+                )
+                VaultTab.SEARCH -> com.example.data.gemini.ActiveViewContext(
+                    viewType = "SEARCH",
+                    searchQuery = _searchQuery.value,
+                    searchResults = _searchResults.value
+                )
+                VaultTab.EXPLORER -> com.example.data.gemini.ActiveViewContext(
+                    viewType = "EXPLORER"
+                )
+                VaultTab.WIKI -> com.example.data.gemini.ActiveViewContext(
+                    viewType = "WIKI",
+                    activeNote = _activeNote.value
+                )
+            }
+
+            val fewShotNotes = allNotes.value.sortedByDescending { it.lastModified }.take(5)
+
             val result = geminiService.generateResponse(
                 messages = _chatMessages.value.filter { it.role != "system" },
                 userPrompt = userText,
                 model = _chatModel.value,
                 vaultNotesContext = contextNotes,
+                activeViewContext = currentActiveView,
+                fewShotSampleNotes = fewShotNotes,
                 authConfig = authConfig.value
             )
 
@@ -518,6 +566,29 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                                 target = "Clipboard Write",
                                                 details = if (ok) "Copied ${text.length} chars to Android clipboard" else "Clipboard write failed",
                                                 success = ok
+                                            )
+                                        )
+                                    }
+                                    "clipboard_read" -> {
+                                        val clipText = repository.readFromClipboard()
+                                        executedTools.add(
+                                            ToolExecutionResult(
+                                                action = "android_skill",
+                                                target = "Clipboard Read",
+                                                details = if (clipText.isNotBlank()) "Read from clipboard: \"${clipText.take(120)}\"" else "Clipboard is empty.",
+                                                success = true
+                                            )
+                                        )
+                                    }
+                                    "query_android_knowledge" -> {
+                                        val q = json.optString("query")
+                                        val topic = repository.getAndroidKnowledgeTopic(q)
+                                        executedTools.add(
+                                            ToolExecutionResult(
+                                                action = "android_skill",
+                                                target = "Knowledge: ${topic?.title ?: q}",
+                                                details = topic?.summary ?: "Knowledge topic '$q' not found.",
+                                                success = topic != null
                                             )
                                         )
                                     }

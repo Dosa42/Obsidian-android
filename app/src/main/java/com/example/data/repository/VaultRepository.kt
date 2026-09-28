@@ -71,6 +71,12 @@ class VaultRepository(
     fun getHardwareSensorsInfo(): HardwareSensorsInfo = skillsManager.getHardwareSensorsInfo()
     suspend fun getStorageAudit(): StorageAudit = skillsManager.getStorageAudit(fileSystemManager.vaultRoot)
     fun copyToClipboard(label: String, text: String): Boolean = skillsManager.copyToClipboard(label, text)
+    fun readFromClipboard(): String = skillsManager.readClipboard() ?: ""
+    fun getAndroidKnowledgeTopic(query: String): AndroidKnowledgeTopic? {
+        return skillsManager.androidKnowledgeBase.find { 
+            it.id.equals(query, ignoreCase = true) || it.title.contains(query, ignoreCase = true) 
+        }
+    }
     fun showToast(msg: String) = skillsManager.showToast(msg)
     fun triggerHaptic(durationMs: Long = 50) = skillsManager.triggerHaptic(durationMs)
     fun shareContent(text: String, title: String = "Share Note") = skillsManager.shareContent(text, title)

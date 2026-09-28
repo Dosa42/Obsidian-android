@@ -49,6 +49,7 @@ fun VaultScreen(
     val hardwareSensorsInfo by viewModel.hardwareSensorsInfo.collectAsStateWithLifecycle()
     val storageAudit by viewModel.storageAudit.collectAsStateWithLifecycle()
     val dynamicScripts by viewModel.dynamicScripts.collectAsStateWithLifecycle()
+    val hardwareState by viewModel.hardwareState.collectAsStateWithLifecycle()
 
     var showAndroidSkillsDialog by remember { mutableStateOf(false) }
     var showStorageAuthDialog by remember { mutableStateOf(false) }
@@ -342,6 +343,7 @@ fun VaultScreen(
             authConfig = authConfig,
             storageAudit = storageAudit,
             vaultPath = viewModel.vaultAbsolutePath,
+            hardwareState = hardwareState,
             onDismiss = { showStorageAuthDialog = false },
             onSaveApiKey = { key -> viewModel.saveApiKey(key) },
             onSavePersona = { name, title, prompt, temp -> viewModel.savePersona(name, title, prompt, temp) },

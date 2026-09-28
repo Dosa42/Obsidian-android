@@ -31,6 +31,7 @@ fun VaultStorageAuthDialog(
     authConfig: VaultAuthConfig,
     storageAudit: StorageAudit?,
     vaultPath: String,
+    hardwareState: com.example.data.adaptive.HardwareContextState? = null,
     onDismiss: () -> Unit,
     onSaveApiKey: (String) -> Unit,
     onSavePersona: (name: String, title: String, prompt: String, temp: Double) -> Unit,
@@ -220,6 +221,44 @@ fun VaultStorageAuthDialog(
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text("Download Partition Free Space:", fontSize = 12.sp, color = ObsidianTextSecondary)
                                             Text("${storageAudit.freeSpaceBytes / (1024 * 1024 * 1024)} GB free", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ObsidianGreen)
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (hardwareState != null) {
+                                Text(
+                                    text = "Adaptive Hardware & Power State",
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = ObsidianTextPrimary
+                                    )
+                                )
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Hardware Tier:", fontSize = 12.sp, color = ObsidianTextSecondary)
+                                            Text(hardwareState.hardwareTier.name, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ObsidianPurpleLight)
+                                        }
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Battery & Power:", fontSize = 12.sp, color = ObsidianTextSecondary)
+                                            Text("${hardwareState.batteryPercent}% (${if (hardwareState.isCharging) "Charging ⚡" else "On Battery"})", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = if (hardwareState.isCharging) ObsidianGreen else ObsidianYellow)
+                                        }
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Network Connection:", fontSize = 12.sp, color = ObsidianTextSecondary)
+                                            Text(hardwareState.networkTier.name.replace("_", " "), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ObsidianTeal)
+                                        }
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Dynamic Context Budget:", fontSize = 12.sp, color = ObsidianTextSecondary)
+                                            Text("${hardwareState.dynamicContextBudget} tokens", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ObsidianTextPrimary)
+                                        }
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Auto Recommended Model:", fontSize = 12.sp, color = ObsidianTextSecondary)
+                                            Text(hardwareState.recommendedModel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ObsidianPurpleLight)
                                         }
                                     }
                                 }

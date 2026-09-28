@@ -23,7 +23,7 @@ class VaultFileSystemManager(
     private val context: Context,
     private val vaultDao: VaultDao
 ) {
-    val dynamicRuleEngine = DynamicRuleEngine()
+    val dynamicRuleEngine = DynamicRuleEngine(context)
 
     val vaultRoot: File get() {
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -278,6 +278,14 @@ class VaultFileSystemManager(
 
     suspend fun syncFilesystemToDatabase(): Int = withContext(Dispatchers.IO) {
         val root = vaultRoot
+        
+        // Automatically execute all "on_vault_scan" dynamic script rules across the vault
+        try {
+            dynamicRuleEngine.executeTrigger("on_vault_scan", root, scriptsDir)
+        } catch (e: Exception) {
+            // Ignore rule scan errors to ensure note indexing proceeds smoothly
+        }
+
         // Ignore dot folders (.database, .auth, .config, .chat, .scripts, .diagnostics)
         val mdFiles = root.walkTopDown()
             .filter { file ->
