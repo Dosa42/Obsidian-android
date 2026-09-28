@@ -43,6 +43,9 @@ fun VaultScreen(
     val isChatLoading by viewModel.isChatLoading.collectAsStateWithLifecycle()
     val chatModel by viewModel.chatModel.collectAsStateWithLifecycle()
     val deviceTelemetry by viewModel.deviceTelemetry.collectAsStateWithLifecycle()
+    val displayMetrics by viewModel.displayMetrics.collectAsStateWithLifecycle()
+    val runtimeJvmInfo by viewModel.runtimeJvmInfo.collectAsStateWithLifecycle()
+    val hardwareSensorsInfo by viewModel.hardwareSensorsInfo.collectAsStateWithLifecycle()
     val storageAudit by viewModel.storageAudit.collectAsStateWithLifecycle()
 
     var showAndroidSkillsDialog by remember { mutableStateOf(false) }
@@ -115,8 +118,7 @@ fun VaultScreen(
                     }
                     IconButton(
                         onClick = {
-                            viewModel.refreshDeviceTelemetry()
-                            viewModel.loadStorageAudit()
+                            viewModel.refreshAllTelemetry()
                             showAndroidSkillsDialog = true
                         },
                         modifier = Modifier.testTag("top_android_skills_button")
@@ -310,8 +312,7 @@ fun VaultScreen(
                         onSaveToVault = { viewModel.saveMessageAsNote(it) },
                         onRunDiagnostic = { viewModel.triggerSystemDiagnostic() },
                         onOpenSkills = {
-                            viewModel.refreshDeviceTelemetry()
-                            viewModel.loadStorageAudit()
+                            viewModel.refreshAllTelemetry()
                             showAndroidSkillsDialog = true
                         }
                     )
@@ -324,18 +325,22 @@ fun VaultScreen(
         AndroidSkillsDialog(
             skillsCatalog = viewModel.skillsCatalog,
             telemetry = deviceTelemetry,
+            displayMetrics = displayMetrics,
+            runtimeJvm = runtimeJvmInfo,
+            sensorsInfo = hardwareSensorsInfo,
             storageAudit = storageAudit,
+            knowledgeBase = viewModel.androidKnowledgeBase,
             onRefreshTelemetry = {
-                viewModel.refreshDeviceTelemetry()
-                viewModel.loadStorageAudit()
+                viewModel.refreshAllTelemetry()
             },
-            onExecuteHook = { hookName ->
-                viewModel.executeAutomationHook(hookName)
+            onExecuteDynamicScript = { scriptId, params ->
+                viewModel.executeDynamicScript(scriptId, params)
                 showAndroidSkillsDialog = false
                 viewModel.selectTab(VaultTab.WIKI)
             },
             onTestToast = { msg -> viewModel.showToast(msg) },
             onTestHaptic = { viewModel.triggerHaptic(60) },
+            onShareContent = { text -> viewModel.shareNote("Obsidian Vault", text) },
             onDismiss = { showAndroidSkillsDialog = false }
         )
     }

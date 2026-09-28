@@ -7,9 +7,13 @@ import com.example.data.model.BacklinkItem
 import com.example.data.model.GraphEdge
 import com.example.data.model.GraphNode
 import com.example.data.model.VaultNote
+import com.example.data.skills.AndroidKnowledgeTopic
 import com.example.data.skills.AndroidSkillDefinition
 import com.example.data.skills.AndroidSkillsManager
 import com.example.data.skills.DeviceTelemetry
+import com.example.data.skills.DisplayMetricsInfo
+import com.example.data.skills.HardwareSensorsInfo
+import com.example.data.skills.RuntimeJvmInfo
 import com.example.data.skills.StorageAudit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -36,14 +40,24 @@ class VaultRepository(
 ) {
     val skillsManager = AndroidSkillsManager(context)
     val skillsCatalog: List<AndroidSkillDefinition> get() = skillsManager.skillsCatalog
+    val androidKnowledgeBase: List<AndroidKnowledgeTopic> get() = skillsManager.androidKnowledgeBase
 
     fun getDeviceTelemetry(): DeviceTelemetry = skillsManager.getDeviceTelemetry()
+    fun getDisplayMetrics(): DisplayMetricsInfo = skillsManager.getDisplayMetrics()
+    fun getRuntimeJvmInfo(): RuntimeJvmInfo = skillsManager.getRuntimeJvmInfo()
+    fun getHardwareSensorsInfo(): HardwareSensorsInfo = skillsManager.getHardwareSensorsInfo()
     suspend fun getStorageAudit(): StorageAudit = skillsManager.getStorageAudit(fileSystemManager.vaultRoot)
     fun copyToClipboard(label: String, text: String): Boolean = skillsManager.copyToClipboard(label, text)
     fun showToast(msg: String) = skillsManager.showToast(msg)
     fun triggerHaptic(durationMs: Long = 50) = skillsManager.triggerHaptic(durationMs)
+    fun shareContent(text: String, title: String = "Share Note") = skillsManager.shareContent(text, title)
+
     suspend fun executeSkillHook(hookName: String, params: JSONObject = JSONObject()): String {
         return skillsManager.executeHook(hookName, fileSystemManager.vaultRoot, params)
+    }
+
+    suspend fun executeDynamicScript(scriptId: String, params: JSONObject = JSONObject()): String {
+        return skillsManager.executeDynamicScript(scriptId, fileSystemManager.vaultRoot, params)
     }
 
     val allNotes: Flow<List<VaultNote>> = vaultDao.getAllNotes()

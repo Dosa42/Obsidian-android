@@ -14,8 +14,12 @@ import com.example.data.model.VaultNote
 import com.example.data.repository.SearchResult
 import com.example.data.repository.VaultGraphData
 import com.example.data.repository.VaultRepository
+import com.example.data.skills.AndroidKnowledgeTopic
 import com.example.data.skills.AndroidSkillDefinition
 import com.example.data.skills.DeviceTelemetry
+import com.example.data.skills.DisplayMetricsInfo
+import com.example.data.skills.HardwareSensorsInfo
+import com.example.data.skills.RuntimeJvmInfo
 import com.example.data.skills.StorageAudit
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -432,6 +436,59 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                             )
                                         )
                                     }
+                                    "get_display_metrics" -> {
+                                        val dm = repository.getDisplayMetrics()
+                                        executedTools.add(
+                                            ToolExecutionResult(
+                                                action = "android_skill",
+                                                target = "Display Metrics",
+                                                details = "Resolution: ${dm.widthPx}x${dm.heightPx} px | DPI: ${dm.densityDpi} (Scale ${dm.densityScale}x) | Orientation: ${dm.orientation}"
+                                            )
+                                        )
+                                    }
+                                    "get_runtime_jvm" -> {
+                                        val jvm = repository.getRuntimeJvmInfo()
+                                        executedTools.add(
+                                            ToolExecutionResult(
+                                                action = "android_skill",
+                                                target = "JVM Runtime",
+                                                details = "Heap: ${jvm.jvmHeapTotalMb}MB (Free ${jvm.jvmHeapFreeMb}MB / Max ${jvm.jvmHeapMaxMb}MB) | Active Threads: ${jvm.activeThreadCount} | Cores: ${jvm.availableProcessors}"
+                                            )
+                                        )
+                                    }
+                                    "get_hardware_sensors" -> {
+                                        val sensors = repository.getHardwareSensorsInfo()
+                                        executedTools.add(
+                                            ToolExecutionResult(
+                                                action = "android_skill",
+                                                target = "Hardware Sensors",
+                                                details = "Sensors: ${sensors.totalSensorsFound} found (Accel: ${sensors.hasAccelerometer}, Gyro: ${sensors.hasGyroscope}, Light: ${sensors.hasLightSensor}, Prox: ${sensors.hasProximitySensor})"
+                                            )
+                                        )
+                                    }
+                                    "share_content" -> {
+                                        val text = json.optString("text")
+                                        val title = json.optString("title", "Share Note")
+                                        repository.shareContent(text, title)
+                                        executedTools.add(
+                                            ToolExecutionResult(
+                                                action = "android_skill",
+                                                target = "System Share",
+                                                details = "Dispatched native Android share sheet for: \"$title\""
+                                            )
+                                        )
+                                    }
+                                    "execute_dynamic_script" -> {
+                                        val script = json.optString("script")
+                                        val res = repository.executeDynamicScript(script, json)
+                                        executedTools.add(
+                                            ToolExecutionResult(
+                                                action = "android_skill",
+                                                target = "Dynamic Script: $script",
+                                                details = res
+                                            )
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -448,7 +505,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 // If tools modified the vault, resync database
-                if (executedTools.any { (it.action != "run_diagnostic" && it.action != "android_skill" && it.success) || (it.action == "android_skill" && it.target.contains("Hook") && it.success) }) {
+                if (executedTools.any { (it.action != "run_diagnostic" && it.action != "android_skill" && it.success) || (it.action == "android_skill" && (it.target.contains("Hook") || it.target.contains("Script")) && it.success) }) {
                     repository.syncVault()
                 }
 
@@ -624,5 +681,51 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerHaptic(durationMs: Long = 50) {
         repository.triggerHaptic(durationMs)
+    }
+
+    val androidKnowledgeBase: List<AndroidKnowledgeTopic> get() = repository.androidKnowledgeBase
+
+    private val _displayMetrics = MutableStateFlow<DisplayMetricsInfo?>(null)
+    val displayMetrics: StateFlow<DisplayMetricsInfo?> = _displayMetrics.asStateFlow()
+
+    private val _runtimeJvmInfo = MutableStateFlow<RuntimeJvmInfo?>(null)
+    val runtimeJvmInfo: StateFlow<RuntimeJvmInfo?> = _runtimeJvmInfo.asStateFlow()
+
+    private val _hardwareSensorsInfo = MutableStateFlow<HardwareSensorsInfo?>(null)
+    val hardwareSensorsInfo: StateFlow<HardwareSensorsInfo?> = _hardwareSensorsInfo.asStateFlow()
+
+    fun refreshAllTelemetry() {
+        _deviceTelemetry.value = repository.getDeviceTelemetry()
+        _displayMetrics.value = repository.getDisplayMetrics()
+        _runtimeJvmInfo.value = repository.getRuntimeJvmInfo()
+        _hardwareSensorsInfo.value = repository.getHardwareSensorsInfo()
+        viewModelScope.launch {
+            _storageAudit.value = repository.getStorageAudit()
+        }
+    }
+
+    fun executeDynamicScript(scriptId: String, params: JSONObject = JSONObject()) {
+        viewModelScope.launch {
+            _isChatLoading.value = true
+            val output = repository.executeDynamicScript(scriptId, params)
+            val msg = ChatMessage(
+                role = "model",
+                text = output,
+                executedTools = listOf(
+                    ToolExecutionResult(
+                        action = "android_skill",
+                        target = "Script: $scriptId",
+                        details = output
+                    )
+                )
+            )
+            _chatMessages.value = _chatMessages.value + msg
+            repository.syncVault()
+            _isChatLoading.value = false
+        }
+    }
+
+    fun shareNote(title: String, content: String) {
+        repository.shareContent(content, title)
     }
 }

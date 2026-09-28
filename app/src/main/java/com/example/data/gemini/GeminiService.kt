@@ -64,6 +64,18 @@ class GeminiService {
         ```tool_call
         {"action": "android_skill", "skill": "get_device_telemetry"}
         ```
+        - Inspect display metrics (resolution, DPI, density scale, orientation):
+        ```tool_call
+        {"action": "android_skill", "skill": "get_display_metrics"}
+        ```
+        - Inspect JVM runtime (heap free/total/max, active threads, available cores):
+        ```tool_call
+        {"action": "android_skill", "skill": "get_runtime_jvm"}
+        ```
+        - Inspect hardware sensors (accelerometer, gyroscope, light, proximity):
+        ```tool_call
+        {"action": "android_skill", "skill": "get_hardware_sensors"}
+        ```
         - Inspect physical disk partition and storage audit:
         ```tool_call
         {"action": "android_skill", "skill": "get_storage_audit"}
@@ -76,11 +88,19 @@ class GeminiService {
         ```tool_call
         {"action": "android_skill", "skill": "trigger_toast", "message": "Notification text"}
         ```
-        - Execute automation hooks & scripts:
+        - Trigger tactile haptic vibration:
         ```tool_call
-        {"action": "android_skill", "skill": "execute_hook", "hook_name": "backup_vault"}
+        {"action": "android_skill", "skill": "trigger_haptic", "duration_ms": 60}
         ```
-        *(Available hooks: `backup_vault` to create a zip snapshot in Download/ObsidianVault_Backups, `generate_moc_index` to generate a Map of Content, `clean_empty_files` to purge empty stub notes)*
+        - Trigger native Android Share Sheet:
+        ```tool_call
+        {"action": "android_skill", "skill": "share_content", "text": "Note text", "title": "Share Title"}
+        ```
+        - Execute DYNAMIC VAULT SCRIPTS & AUTOMATION HOOKS:
+        ```tool_call
+        {"action": "android_skill", "skill": "execute_dynamic_script", "script": "todo_aggregator"}
+        ```
+        *(Available dynamic scripts: `todo_aggregator` [extracts all tasks into Master Tasks MOC], `frontmatter_injector` [adds YAML metadata to all notes], `word_frequency_analyzer` [writes Lexical Analytics MOC], `export_vault_json` [exports vault graph as JSON], `wikilink_normalizer` [cleans link whitespace], `backup_vault` [zips vault into Download/ObsidianVault_Backups], `generate_moc_index` [Map of Content], `clean_empty_files` [purges 0-byte stubs], `regex_replace` with "pattern" and "replacement")*
         
         You may invoke multiple tool calls in a single turn. You can also mix markdown explanations with tool_call blocks.
     """.trimIndent()
