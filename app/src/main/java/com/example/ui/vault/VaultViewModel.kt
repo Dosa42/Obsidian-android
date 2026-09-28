@@ -25,6 +25,7 @@ import com.example.data.skills.DisplayMetricsInfo
 import com.example.data.skills.HardwareSensorsInfo
 import com.example.data.skills.RuntimeJvmInfo
 import com.example.data.skills.StorageAudit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -1029,6 +1030,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveGraphNodePositions(positions: Map<String, Pair<Float, Float>>) {
-        repository.updateCachedNodePositions(positions)
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateCachedNodePositions(positions)
+        }
     }
 }

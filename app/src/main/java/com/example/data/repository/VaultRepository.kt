@@ -25,6 +25,7 @@ import com.example.data.skills.StorageAudit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -310,23 +311,29 @@ class VaultRepository(
         }
     }
 
+    private val diskWriteScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+
     fun updateCachedNodePositions(positions: Map<String, Pair<Float, Float>>) {
-        ensurePositionsLoaded()
-        nodePositionCache.putAll(positions)
-        try {
-            val file = positionsFile
-            file.parentFile?.mkdirs()
-            val obj = JSONObject()
-            nodePositionCache.forEach { (id, pair) ->
-                val arr = org.json.JSONArray().apply {
-                    put(pair.first.toDouble())
-                    put(pair.second.toDouble())
+        if (positions.isEmpty()) return
+        diskWriteScope.launch {
+            try {
+                ensurePositionsLoaded()
+                nodePositionCache.putAll(positions)
+                val snapshot = HashMap(nodePositionCache)
+                val file = positionsFile
+                file.parentFile?.mkdirs()
+                val obj = JSONObject()
+                snapshot.forEach { (id, pair) ->
+                    val arr = org.json.JSONArray().apply {
+                        put(pair.first.toDouble())
+                        put(pair.second.toDouble())
+                    }
+                    obj.put(id, arr)
                 }
-                obj.put(id, arr)
+                file.writeText(obj.toString())
+            } catch (e: Exception) {
+                android.util.Log.e("VaultRepository", "Failed saving graph_positions.json in background", e)
             }
-            file.writeText(obj.toString())
-        } catch (e: Exception) {
-            android.util.Log.e("VaultRepository", "Failed saving graph_positions.json", e)
         }
     }
 

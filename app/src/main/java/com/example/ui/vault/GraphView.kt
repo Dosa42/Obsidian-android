@@ -205,12 +205,10 @@ fun GraphView(
                 // Settle detection & durable position persistence
                 if (draggedNodeId == null && totalMovement < 0.25f) {
                     consecutiveQuietSteps++
-                    // Persist settled positions to disk upon reaching rest
+                    // Persist settled positions to disk upon reaching rest without blocking UI thread
                     if (consecutiveQuietSteps == 30) {
                         val snapshot = localNodes.associate { it.id to Pair(it.x, it.y) }
-                        withContext(Dispatchers.Main) {
-                            onSavePositions(snapshot)
-                        }
+                        onSavePositions(snapshot)
                     }
                     if (consecutiveQuietSteps > 30) {
                         delay(200L) // Idle sleep until user drag or configuration change
@@ -608,7 +606,7 @@ fun GraphView(
                     },
                     label = {
                         Text(
-                            if (display.isLocalGraph) "🎯 Local Graph (${display.localGraphDepth}x)" else "🌐 Global Vault",
+                            if (display.isLocalGraph) "🎯 Local (${display.localGraphDepth}x)" else "🌐 Global",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -620,6 +618,24 @@ fun GraphView(
                             modifier = Modifier.size(14.dp)
                         )
                     }
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Quick Attachments Filter Chip
+                FilterChip(
+                    selected = filters.showAttachments,
+                    onClick = {
+                        filters = filters.copy(showAttachments = !filters.showAttachments)
+                    },
+                    label = {
+                        Text(
+                            "📎 Attachments",
+                            fontSize = 12.sp,
+                            fontWeight = if (filters.showAttachments) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    modifier = Modifier.testTag("toggle_attachments_chip")
                 )
 
                 Spacer(modifier = Modifier.width(8.dp))

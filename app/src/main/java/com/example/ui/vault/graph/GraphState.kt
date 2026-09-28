@@ -18,7 +18,7 @@ data class GraphFilterConfig(
     val showUnresolvedNotes: Boolean = true,
     val showOrphans: Boolean = true,
     val showTags: Boolean = true,
-    val showAttachments: Boolean = false
+    val showAttachments: Boolean = true
 )
 
 data class GraphDisplayConfig(

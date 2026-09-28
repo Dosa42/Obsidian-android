@@ -190,6 +190,13 @@ fun GraphSettingsDialog(
                                         checked = filters.showTags,
                                         onCheckedChange = { onUpdateFilters(filters.copy(showTags = it)) }
                                     )
+                                    HorizontalDivider(color = ObsidianBorder)
+                                    FilterToggleRow(
+                                        title = "Attachments",
+                                        subtitle = "Display images, audio, video and document nodes linked in vault",
+                                        checked = filters.showAttachments,
+                                        onCheckedChange = { onUpdateFilters(filters.copy(showAttachments = it)) }
+                                    )
                                 }
                             }
                         }

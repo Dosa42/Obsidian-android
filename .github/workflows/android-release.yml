@@ -163,30 +163,36 @@ jobs:
           # 4. Self-heal .env configuration for secrets plugin
           if [ ! -f ".env" ]; then
             echo "Creating fallback .env configuration..."
-            if [ -f ".env.example" ]; then
-              cp .env.example .env
-            else
-              echo "GEMINI_API_KEY=dummy_key_for_ci" > .env
-            fi
+            echo 'GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY || "" }}"' > .env
             echo "✅ .env initialized."
           fi
           
-          # 5. Dynamic Keystore Healing (Generate unique keypair for every build so no identical signatures collide)
+          # 5. Stable & Consistent Release Keystore Setup (Alias 'upload' strictly matching app/build.gradle.kts)
           KEYSTORE_FILE="${GITHUB_WORKSPACE}/my-upload-key.jks"
-          KEY_PASS="ObsidianVault_${BUILD_NUMBER}_${BUILD_TIMESTAMP}"
+          KEY_PASS="${{ secrets.KEYSTORE_PASSWORD || 'obsidianvault' }}"
           
           if [ ! -f "$KEYSTORE_FILE" ]; then
-            echo "🔐 Generating unique dynamic keystore for build ${BUILD_VERSION}..."
-            keytool -genkeypair -v \
-              -keystore "$KEYSTORE_FILE" \
-              -alias "upload_${BUILD_VERSION}" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass "$KEY_PASS" \
-              -keypass "$KEY_PASS" \
-              -dname "CN=Obsidian Vault, OU=${BUILD_VERSION}, O=AI Studio CI, L=Amsterdam, ST=NH, C=NL"
-            echo "✅ Created dynamic release keystore: $KEYSTORE_FILE"
+            if [ -f "${GITHUB_WORKSPACE}/my-upload-key.base64" ]; then
+              echo "Restoring stable upload keystore from my-upload-key.base64..."
+              base64 -d "${GITHUB_WORKSPACE}/my-upload-key.base64" > "$KEYSTORE_FILE"
+            elif [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+              echo "Restoring stable upload keystore from GitHub Secret RELEASE_KEYSTORE_BASE64..."
+              echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_FILE"
+            else
+              echo "🔐 Generating stable release keystore with alias 'upload'..."
+              keytool -genkeypair -v \
+                -keystore "$KEYSTORE_FILE" \
+                -alias "upload" \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -storepass "$KEY_PASS" \
+                -keypass "$KEY_PASS" \
+                -dname "CN=Obsidian Vault, OU=Mobile, O=AI Studio, L=Amsterdam, ST=NH, C=NL"
+            fi
+            echo "✅ Release keystore ready: $KEYSTORE_FILE"
+          else
+            echo "✅ Using existing repository release keystore: $KEYSTORE_FILE"
           fi
           
           echo "KEYSTORE_PATH=$KEYSTORE_FILE" >> $GITHUB_ENV
@@ -205,9 +211,15 @@ jobs:
 
       # Step 6: Execute Build with Adaptive Live Error Recovery
       - name: 🔨 Build Android APK (${{ env.SELECTED_BUILD_TYPE }})
+        env:
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          STORE_PASSWORD: ${{ env.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
+          CI: true
         run: |
           echo "=========================================================="
           echo "Building ${SELECTED_BUILD_TYPE} APK for version ${BUILD_VERSION}..."
+          echo "Using Keystore: ${KEYSTORE_PATH} (Alias: upload)"
           echo "=========================================================="
           
           BUILD_TASK="assembleRelease"
@@ -220,11 +232,15 @@ jobs:
             CLEAN_FLAG="clean"
           fi
           
-          # First build attempt
+          # First build attempt with non-interactive flags and explicit signing parameters
           echo "Starting primary build attempt..."
           if ./gradlew $CLEAN_FLAG $BUILD_TASK --stacktrace --no-daemon \
              -Pandroid.injected.version.code="${BUILD_NUMBER}" \
-             -Pandroid.injected.version.name="${BUILD_VERSION}"; then
+             -Pandroid.injected.version.name="${BUILD_VERSION}" \
+             -Pandroid.injected.signing.store.file="${KEYSTORE_PATH}" \
+             -Pandroid.injected.signing.store.password="${STORE_PASSWORD}" \
+             -Pandroid.injected.signing.key.alias="upload" \
+             -Pandroid.injected.signing.key.password="${KEY_PASSWORD}"; then
             echo "✅ Primary build attempt succeeded!"
           else
             echo "⚠️ Primary build encountered an error! Initiating Live Self-Healing Recovery..."
@@ -236,7 +252,11 @@ jobs:
             echo "Running heal recovery with refreshed dependencies..."
             ./gradlew $BUILD_TASK --refresh-dependencies --stacktrace --no-daemon \
                -Pandroid.injected.version.code="${BUILD_NUMBER}" \
-               -Pandroid.injected.version.name="${BUILD_VERSION}"
+               -Pandroid.injected.version.name="${BUILD_VERSION}" \
+               -Pandroid.injected.signing.store.file="${KEYSTORE_PATH}" \
+               -Pandroid.injected.signing.store.password="${STORE_PASSWORD}" \
+               -Pandroid.injected.signing.key.alias="upload" \
+               -Pandroid.injected.signing.key.password="${KEY_PASSWORD}"
             
             echo "✅ Self-healing build completed successfully!"
           fi
