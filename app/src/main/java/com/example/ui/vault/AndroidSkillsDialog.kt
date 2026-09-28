@@ -306,8 +306,10 @@ private fun TelemetryTabContent(
                     border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(ObsidianBorder))
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TelemetryRow("Vault Path", storageAudit.vaultPath, Icons.Default.Folder)
-                        TelemetryRow("Indexed Files", "${storageAudit.totalFiles} files (${storageAudit.totalSizeBytes / 1024} KB)", Icons.Default.Description)
+                        TelemetryRow("Vault Path (Read/Write)", storageAudit.vaultPath, Icons.Default.Folder)
+                        TelemetryRow("Room Database Path", storageAudit.roomDatabasePath, Icons.Default.Storage)
+                        TelemetryRow("App Private Sandbox", storageAudit.internalFilesDir, Icons.Default.FolderSpecial)
+                        TelemetryRow("Indexed Notes", "${storageAudit.totalFiles} files (${storageAudit.totalSizeBytes / 1024} KB)", Icons.Default.Description)
                         TelemetryRow("Free Partition Space", "${storageAudit.freeSpaceBytes / (1024 * 1024 * 1024)} GB / ${storageAudit.totalPartitionBytes / (1024 * 1024 * 1024)} GB", Icons.Default.Storage)
                     }
                 }

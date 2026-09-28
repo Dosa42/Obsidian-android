@@ -84,6 +84,8 @@ data class HardwareSensorsInfo(
 
 data class StorageAudit(
     val vaultPath: String,
+    val roomDatabasePath: String,
+    val internalFilesDir: String,
     val totalFiles: Int,
     val totalSizeBytes: Long,
     val freeSpaceBytes: Long,
@@ -382,8 +384,13 @@ class AndroidSkillsManager(private val context: Context) {
             folderBreakdown[folder] = (folderBreakdown[folder] ?: 0) + 1
         }
 
+        val dbFile = context.getDatabasePath("obsidian_vault.db")
+        val internalDir = context.filesDir
+
         StorageAudit(
             vaultPath = vaultDir.absolutePath,
+            roomDatabasePath = dbFile.absolutePath,
+            internalFilesDir = internalDir.absolutePath,
             totalFiles = files.size,
             totalSizeBytes = totalBytes,
             freeSpaceBytes = freeBytes,
