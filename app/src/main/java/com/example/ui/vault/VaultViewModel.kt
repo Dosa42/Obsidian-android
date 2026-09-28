@@ -35,7 +35,8 @@ enum class VaultTab {
     EDITOR,
     GRAPH,
     SEARCH,
-    WIKI
+    WIKI,
+    CHATGPT_WEB
 }
 
 class VaultViewModel(application: Application) : AndroidViewModel(application) {
@@ -43,6 +44,16 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val fileSystemManager = VaultFileSystemManager(application, database.vaultDao())
     private val repository = VaultRepository(database.vaultDao(), fileSystemManager, application)
     private val geminiService = GeminiService()
+
+    val chatGPTAuthManager = com.example.data.auth.ChatGPTAuthManager(application, viewModelScope)
+    val chatGPTSession: StateFlow<com.example.data.auth.ChatGPTSession?> = chatGPTAuthManager.sessionState
+    val chatGPTModels: StateFlow<List<com.example.data.auth.ChatGPTModelInfo>> = chatGPTAuthManager.models
+
+    private val _activeProvider = MutableStateFlow("gemini") // "gemini" or "chatgpt"
+    val activeProvider: StateFlow<String> = _activeProvider.asStateFlow()
+
+    private val _selectedChatGPTModel = MutableStateFlow("gpt-4o")
+    val selectedChatGPTModel: StateFlow<String> = _selectedChatGPTModel.asStateFlow()
 
     private val fileObserverManager = VaultFileObserverManager(fileSystemManager.vaultRoot, viewModelScope)
     private val adaptiveHardwareManager = com.example.data.adaptive.AdaptiveHardwareManager(application, viewModelScope)
@@ -426,21 +437,52 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                     viewType = "WIKI",
                     activeNote = _activeNote.value
                 )
+                VaultTab.CHATGPT_WEB -> com.example.data.gemini.ActiveViewContext(
+                    viewType = "CHATGPT_WEB"
+                )
             }
 
             val fewShotNotes = allNotes.value.sortedByDescending { it.lastModified }.take(5)
 
-            val result = geminiService.generateResponse(
-                messages = _chatMessages.value.filter { it.role != "system" },
-                userPrompt = userText,
-                model = _chatModel.value,
-                vaultNotesContext = contextNotes,
-                activeViewContext = currentActiveView,
-                fewShotSampleNotes = fewShotNotes,
-                authConfig = authConfig.value
-            )
+            val replyResult: Result<String> = if (_activeProvider.value == "chatgpt") {
+                val session = chatGPTSession.value
+                if (session == null || !session.isValid) {
+                    Result.failure(IllegalStateException("ChatGPT OAuth session is not authenticated or has expired. Please sign in via the Storage & Auth Hub."))
+                } else {
+                    val systemInst = geminiService.buildAdaptiveSystemInstruction(
+                        authConfig = authConfig.value,
+                        vaultNotesContext = contextNotes,
+                        activeViewContext = currentActiveView,
+                        fewShotSampleNotes = fewShotNotes,
+                        contextBudget = hardwareState.value.dynamicContextBudget
+                    )
+                    try {
+                        val reply = chatGPTAuthManager.streamResponses(
+                            model = _selectedChatGPTModel.value,
+                            messages = _chatMessages.value.filter { it.role != "system" },
+                            userPrompt = userText,
+                            systemInstructions = systemInst,
+                            onChunk = {},
+                            onStatus = {}
+                        )
+                        Result.success(reply)
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
+                }
+            } else {
+                geminiService.generateResponse(
+                    messages = _chatMessages.value.filter { it.role != "system" },
+                    userPrompt = userText,
+                    model = _chatModel.value,
+                    vaultNotesContext = contextNotes,
+                    activeViewContext = currentActiveView,
+                    fewShotSampleNotes = fewShotNotes,
+                    authConfig = authConfig.value
+                )
+            }
 
-            result.onSuccess { reply ->
+            replyResult.onSuccess { reply ->
                 val cited = contextNotes.map { it.title }
                 val executedTools = mutableListOf<ToolExecutionResult>()
 
@@ -938,5 +980,32 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     fun shareNote(title: String, content: String) {
         repository.shareContent(content, title)
+    }
+
+    fun setActiveProvider(provider: String) {
+        _activeProvider.value = provider
+    }
+
+    fun setSelectedChatGPTModel(modelId: String) {
+        _selectedChatGPTModel.value = modelId
+    }
+
+    fun initiateChatGPTLogin(customClientId: String? = null): String {
+        return chatGPTAuthManager.initiateLogin(customClientId)
+    }
+
+    fun completeChatGPTLogin(callbackUrl: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val res = chatGPTAuthManager.completeLoginWithUrl(callbackUrl)
+            res.onSuccess { session ->
+                onResult(true, session.email)
+            }.onFailure { err ->
+                onResult(false, err.message ?: "Sign-in failed")
+            }
+        }
+    }
+
+    fun signOutOfChatGPT() {
+        chatGPTAuthManager.clearSession()
     }
 }

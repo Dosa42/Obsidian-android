@@ -50,6 +50,8 @@ fun VaultScreen(
     val storageAudit by viewModel.storageAudit.collectAsStateWithLifecycle()
     val dynamicScripts by viewModel.dynamicScripts.collectAsStateWithLifecycle()
     val hardwareState by viewModel.hardwareState.collectAsStateWithLifecycle()
+    val chatGPTSession by viewModel.chatGPTSession.collectAsStateWithLifecycle()
+    val activeProvider by viewModel.activeProvider.collectAsStateWithLifecycle()
 
     var showAndroidSkillsDialog by remember { mutableStateOf(false) }
     var showStorageAuthDialog by remember { mutableStateOf(false) }
@@ -118,6 +120,16 @@ fun VaultScreen(
                             imageVector = Icons.Default.Hub,
                             contentDescription = "Graph View",
                             tint = if (activeTab == VaultTab.GRAPH) ObsidianPurpleLight else ObsidianTextSecondary
+                        )
+                    }
+                    IconButton(
+                        onClick = { viewModel.selectTab(VaultTab.CHATGPT_WEB) },
+                        modifier = Modifier.testTag("top_chatgpt_web_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Bolt,
+                            contentDescription = "ChatGPT PKCE Web",
+                            tint = if (activeTab == VaultTab.CHATGPT_WEB) ObsidianTeal else ObsidianTextSecondary
                         )
                     }
                     IconButton(
@@ -334,6 +346,12 @@ fun VaultScreen(
                         }
                     )
                 }
+                VaultTab.CHATGPT_WEB -> {
+                    com.example.ui.chatgpt.ChatGPTWebChatScreen(
+                        chatGPTAuthManager = viewModel.chatGPTAuthManager,
+                        onClose = { viewModel.selectTab(VaultTab.WIKI) }
+                    )
+                }
             }
         }
     }
@@ -344,6 +362,12 @@ fun VaultScreen(
             storageAudit = storageAudit,
             vaultPath = viewModel.vaultAbsolutePath,
             hardwareState = hardwareState,
+            chatGPTSession = chatGPTSession,
+            activeProvider = activeProvider,
+            onSelectProvider = { viewModel.setActiveProvider(it) },
+            onInitiateChatGPTLogin = { viewModel.initiateChatGPTLogin() },
+            onCompleteChatGPTLogin = { url -> viewModel.completeChatGPTLogin(url) { _, _ -> } },
+            onSignOutOfChatGPT = { viewModel.signOutOfChatGPT() },
             onDismiss = { showStorageAuthDialog = false },
             onSaveApiKey = { key -> viewModel.saveApiKey(key) },
             onSavePersona = { name, title, prompt, temp -> viewModel.savePersona(name, title, prompt, temp) },
