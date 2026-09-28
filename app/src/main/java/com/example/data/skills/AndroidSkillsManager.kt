@@ -640,7 +640,7 @@ class AndroidSkillsManager(private val context: Context) {
 
             else -> {
                 val scriptsDir = File(vaultDir, ".scripts")
-                val ruleEngine = com.example.data.scripts.DynamicRuleEngine()
+                val ruleEngine = com.example.data.scripts.DynamicRuleEngine(context)
                 val customRules = ruleEngine.loadAllScripts(scriptsDir)
                 val matching = customRules.find { it.id.equals(scriptId, ignoreCase = true) || File(it.filePath).name.equals(scriptId, ignoreCase = true) }
                 if (matching != null) {

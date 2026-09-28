@@ -108,6 +108,14 @@ class GeminiService {
         ```tool_call
         {"action": "android_skill", "skill": "clipboard_write", "text": "Content to copy"}
         ```
+        - System Clipboard Read:
+        ```tool_call
+        {"action": "android_skill", "skill": "clipboard_read"}
+        ```
+        - Query Android Knowledge Base:
+        ```tool_call
+        {"action": "android_skill", "skill": "query_android_knowledge", "query": "scoped_storage"}
+        ```
         - Android Toast:
         ```tool_call
         {"action": "android_skill", "skill": "trigger_toast", "message": "Notification message"}
@@ -124,7 +132,7 @@ class GeminiService {
         ```tool_call
         {"action": "android_skill", "skill": "execute_dynamic_script", "script": "auto_tagger"}
         ```
-        *(Available dynamic scripts: `auto_tagger`, `concept_auto_linker`, `task_normalizer`, `format_cleaner`, `todo_aggregator`, `frontmatter_injector`, `word_frequency_analyzer`, `export_vault_json`, `wikilink_normalizer`, `backup_vault`, `generate_moc_index`, `clean_empty_files`, `regex_replace`)*
+        *(Available dynamic scripts: `auto_tagger`, `concept_auto_linker`, `task_normalizer`, `custom_markdown_formatter`, `todo_aggregator`, `frontmatter_injector`, `word_frequency_analyzer`, `export_vault_json`, `wikilink_normalizer`, `backup_vault`, `generate_moc_index`, `clean_empty_files`, `regex_replace`)*
 
         Always emit both direct markdown explanation and the necessary tool_call blocks when an action is requested.
     """.trimIndent()
