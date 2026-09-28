@@ -184,6 +184,14 @@ fun VaultStorageAuthDialog(
                                         badge = "Chat Log",
                                         badgeColor = ObsidianGreen
                                     )
+                                    Divider(color = ObsidianBorder)
+                                    StoragePathItem(
+                                        icon = Icons.Default.Code,
+                                        label = "Dynamic Scripts & Rules",
+                                        path = "$vaultPath/.scripts/",
+                                        badge = "Hot-Reloaded",
+                                        badgeColor = ObsidianTeal
+                                    )
                                 }
                             }
 

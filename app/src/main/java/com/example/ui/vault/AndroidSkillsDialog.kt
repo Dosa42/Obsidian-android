@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.example.data.scripts.DynamicScriptRule
 import com.example.data.skills.*
 import com.example.ui.theme.*
 import org.json.JSONObject
@@ -27,6 +28,7 @@ import org.json.JSONObject
 @Composable
 fun AndroidSkillsDialog(
     skillsCatalog: List<AndroidSkillDefinition>,
+    dynamicScriptRules: List<DynamicScriptRule>,
     telemetry: DeviceTelemetry?,
     displayMetrics: DisplayMetricsInfo?,
     runtimeJvm: RuntimeJvmInfo?,
@@ -35,6 +37,7 @@ fun AndroidSkillsDialog(
     knowledgeBase: List<AndroidKnowledgeTopic>,
     onRefreshTelemetry: () -> Unit,
     onExecuteDynamicScript: (String, JSONObject) -> Unit,
+    onExecuteCustomRule: (DynamicScriptRule) -> Unit,
     onTestToast: (String) -> Unit,
     onTestHaptic: () -> Unit,
     onShareContent: (String) -> Unit,
@@ -87,7 +90,7 @@ fun AndroidSkillsDialog(
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "Android Skills & Knowledge",
+                                    text = "Android Skills & Inotify Hub",
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.Bold,
                                         color = ObsidianTextPrimary
@@ -95,71 +98,92 @@ fun AndroidSkillsDialog(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    color = ObsidianPurpleContainer,
-                                    shape = RoundedCornerShape(4.dp)
+                                    color = ObsidianGreen.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = androidx.compose.foundation.BorderStroke(0.5.dp, ObsidianGreen)
                                 ) {
                                     Text(
-                                        text = "Dynamic Engine",
+                                        text = "Inotify Active ⚡",
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = ObsidianPurpleLight,
+                                        color = ObsidianGreen,
                                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                                     )
                                 }
                             }
                             Text(
-                                text = "Full OS telemetry, dynamic scripts & architecture",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = ObsidianTextSecondary,
-                                    fontSize = 11.sp
-                                )
+                                text = "Live Kernel FileObserver · Telemetry · Dynamic Scripts",
+                                fontSize = 11.sp,
+                                color = ObsidianTextSecondary
                             )
                         }
                     }
-
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.testTag("close_android_skills_dialog")
+                    ) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = ObsidianTextSecondary)
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Navigation Tabs
-                ScrollableTabRow(
+                // Tab Switcher
+                TabRow(
                     selectedTabIndex = selectedTab,
                     containerColor = ObsidianSurfaceElevated,
-                    contentColor = ObsidianPurpleLight,
-                    edgePadding = 0.dp
+                    contentColor = ObsidianPurpleLight
                 ) {
                     Tab(
                         selected = selectedTab == 0,
                         onClick = { selectedTab = 0 },
-                        text = { Text("Telemetry", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                        text = { Text("Telemetry", fontSize = 11.sp) },
+                        icon = { Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                     Tab(
                         selected = selectedTab == 1,
                         onClick = { selectedTab = 1 },
-                        text = { Text("Skills (${skillsCatalog.size})", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                        text = { Text("OS Skills", fontSize = 11.sp) },
+                        icon = { Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                     Tab(
                         selected = selectedTab == 2,
                         onClick = { selectedTab = 2 },
-                        text = { Text("Dynamic Scripts", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                        text = { Text("Dynamic Scripts", fontSize = 11.sp) },
+                        icon = { Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                     Tab(
                         selected = selectedTab == 3,
                         onClick = { selectedTab = 3 },
-                        text = { Text("Full Knowledge (${knowledgeBase.size})", fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                        text = { Text("Architecture", fontSize = 11.sp) },
+                        icon = { Icon(Icons.Default.MenuBook, contentDescription = null, modifier = Modifier.size(16.dp)) }
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                when (selectedTab) {
-                    0 -> TelemetryTabContent(telemetry, displayMetrics, runtimeJvm, sensorsInfo, storageAudit, onRefreshTelemetry)
-                    1 -> SkillsCatalogTabContent(skillsCatalog)
-                    2 -> DynamicScriptsTabContent(onExecuteDynamicScript, onTestToast, onTestHaptic, onShareContent)
-                    3 -> KnowledgeBaseTabContent(knowledgeBase)
+                // Content
+                Box(modifier = Modifier.weight(1f)) {
+                    when (selectedTab) {
+                        0 -> TelemetryTabContent(
+                            telemetry = telemetry,
+                            displayMetrics = displayMetrics,
+                            runtimeJvm = runtimeJvm,
+                            sensorsInfo = sensorsInfo,
+                            storageAudit = storageAudit,
+                            onRefresh = onRefreshTelemetry
+                        )
+                        1 -> SkillsCatalogTabContent(skillsCatalog)
+                        2 -> DynamicScriptsTabContent(
+                            dynamicScriptRules = dynamicScriptRules,
+                            onExecuteDynamicScript = onExecuteDynamicScript,
+                            onExecuteCustomRule = onExecuteCustomRule,
+                            onTestToast = onTestToast,
+                            onTestHaptic = onTestHaptic,
+                            onShareContent = onShareContent
+                        )
+                        3 -> KnowledgeBaseTabContent(knowledgeBase)
+                    }
                 }
             }
         }
@@ -173,7 +197,7 @@ private fun TelemetryTabContent(
     runtimeJvm: RuntimeJvmInfo?,
     sensorsInfo: HardwareSensorsInfo?,
     storageAudit: StorageAudit?,
-    onRefreshTelemetry: () -> Unit
+    onRefresh: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -186,21 +210,15 @@ private fun TelemetryTabContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "DEVICE TELEMETRY & HARDWARE HOOKS",
+                    text = "REALTIME KERNEL & HARDWARE TELEMETRY",
                     style = MaterialTheme.typography.labelSmall.copy(
                         letterSpacing = 1.1.sp,
                         color = ObsidianTextSecondary,
                         fontWeight = FontWeight.Bold
                     )
                 )
-                TextButton(
-                    onClick = onRefreshTelemetry,
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                    modifier = Modifier.height(26.dp)
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, tint = ObsidianTeal, modifier = Modifier.size(13.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Refresh", fontSize = 11.sp, color = ObsidianTeal)
+                IconButton(onClick = onRefresh, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = ObsidianPurpleLight, modifier = Modifier.size(16.dp))
                 }
             }
         }
@@ -212,21 +230,13 @@ private fun TelemetryTabContent(
                     border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(ObsidianBorder))
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TelemetryRow("OS Platform", "Android ${telemetry.osVersion} (API ${telemetry.sdkInt})", Icons.Default.Info)
-                        TelemetryRow("Model & Hardware", "${telemetry.manufacturer} ${telemetry.deviceModel}", Icons.Default.PhoneAndroid)
-                        TelemetryRow("CPU ABI", telemetry.cpuAbi, Icons.Default.Memory)
-                        TelemetryRow(
-                            "RAM Memory",
-                            "${telemetry.ramUsagePercent}% (${telemetry.availableRamMb} MB / ${telemetry.totalRamMb} MB free)",
-                            Icons.Default.Speed
-                        )
-                        TelemetryRow(
-                            "Battery Status",
-                            "${telemetry.batteryPercent}% (${if (telemetry.isCharging) "Charging ⚡" else "Discharging"})",
-                            Icons.Default.BatteryChargingFull
-                        )
-                        TelemetryRow("Network", "${telemetry.networkType} · ${if (telemetry.isNetworkConnected) "Online" else "Offline"}", Icons.Default.Wifi)
-                        TelemetryRow("System Uptime", "${telemetry.uptimeMinutes} minutes", Icons.Default.Schedule)
+                        TelemetryRow("Android Version", "Android ${telemetry.osVersion} (API Level ${telemetry.sdkInt})", Icons.Default.Info)
+                        TelemetryRow("Hardware Device", "${telemetry.manufacturer} ${telemetry.deviceModel}", Icons.Default.PhoneAndroid)
+                        TelemetryRow("CPU Architecture", telemetry.cpuAbi, Icons.Default.Memory)
+                        TelemetryRow("Battery Level", "${telemetry.batteryPercent}% (${if (telemetry.isCharging) "Charging ⚡" else "Discharging"})", Icons.Default.BatteryChargingFull)
+                        TelemetryRow("RAM Available / Total", "${telemetry.availableRamMb} MB free / ${telemetry.totalRamMb} MB (${telemetry.ramUsagePercent}% used)", Icons.Default.Storage)
+                        TelemetryRow("System Uptime", "${telemetry.uptimeMinutes} minutes", Icons.Default.Timer)
+                        TelemetryRow("Network Connection", "${telemetry.networkType} (${if (telemetry.isNetworkConnected) "Connected ✅" else "Offline ❌"})", Icons.Default.Wifi)
                     }
                 }
             }
@@ -235,7 +245,7 @@ private fun TelemetryTabContent(
         if (displayMetrics != null) {
             item {
                 Text(
-                    text = "DISPLAY & WINDOW METRICS",
+                    text = "DISPLAY & SCREEN METRICS",
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.1.sp, color = ObsidianTextSecondary, fontWeight = FontWeight.Bold)
                 )
                 Spacer(modifier = Modifier.height(4.dp))
@@ -245,8 +255,8 @@ private fun TelemetryTabContent(
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         TelemetryRow("Screen Resolution", "${displayMetrics.widthPx} x ${displayMetrics.heightPx} px", Icons.Default.AspectRatio)
-                        TelemetryRow("Screen Density", "${displayMetrics.densityDpi} DPI (${displayMetrics.densityScale}x)", Icons.Default.ScreenRotation)
-                        TelemetryRow("Window Orientation", displayMetrics.orientation, Icons.Default.ScreenLockPortrait)
+                        TelemetryRow("Density DPI", "${displayMetrics.densityDpi} dpi (Scale ${displayMetrics.densityScale}x)", Icons.Default.ZoomIn)
+                        TelemetryRow("Orientation", displayMetrics.orientation, Icons.Default.ScreenRotation)
                     }
                 }
             }
@@ -308,7 +318,6 @@ private fun TelemetryTabContent(
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         TelemetryRow("Vault Path (Read/Write)", storageAudit.vaultPath, Icons.Default.Folder)
                         TelemetryRow("Room Database Path", storageAudit.roomDatabasePath, Icons.Default.Storage)
-                        TelemetryRow("App Private Sandbox", storageAudit.internalFilesDir, Icons.Default.FolderSpecial)
                         TelemetryRow("Indexed Notes", "${storageAudit.totalFiles} files (${storageAudit.totalSizeBytes / 1024} KB)", Icons.Default.Description)
                         TelemetryRow("Free Partition Space", "${storageAudit.freeSpaceBytes / (1024 * 1024 * 1024)} GB / ${storageAudit.totalPartitionBytes / (1024 * 1024 * 1024)} GB", Icons.Default.Storage)
                     }
@@ -406,7 +415,9 @@ private fun SkillsCatalogTabContent(skills: List<AndroidSkillDefinition>) {
 
 @Composable
 private fun DynamicScriptsTabContent(
+    dynamicScriptRules: List<DynamicScriptRule>,
     onExecuteDynamicScript: (String, JSONObject) -> Unit,
+    onExecuteCustomRule: (DynamicScriptRule) -> Unit,
     onTestToast: (String) -> Unit,
     onTestHaptic: () -> Unit,
     onShareContent: (String) -> Unit
@@ -419,9 +430,87 @@ private fun DynamicScriptsTabContent(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // Active inotify live scripts from .scripts/
         item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "RUNTIME SCRIPTS & PLUGINS (.scripts/)",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        letterSpacing = 1.1.sp,
+                        color = ObsidianTeal,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Surface(
+                    color = ObsidianPurpleContainer,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = "${dynamicScriptRules.size} rules loaded",
+                        fontSize = 9.sp,
+                        color = ObsidianPurpleLight,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+
+        items(dynamicScriptRules, key = { it.filePath }) { rule ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder)
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = rule.name,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = ObsidianTextPrimary
+                        )
+                        Surface(
+                            color = ObsidianBackground,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "Trigger: ${rule.trigger}",
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = ObsidianYellow,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(text = rule.description, fontSize = 11.sp, color = ObsidianTextSecondary)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        Button(
+                            onClick = { onExecuteCustomRule(rule) },
+                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianPurple),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                            modifier = Modifier.height(26.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Run Script", fontSize = 10.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Divider(color = ObsidianBorder)
             Text(
-                text = "DYNAMIC VAULT AUTOMATION SCRIPTS",
+                text = "BUILT-IN AUTOMATION HOOKS",
                 style = MaterialTheme.typography.labelSmall.copy(
                     letterSpacing = 1.1.sp,
                     color = ObsidianTextSecondary,
@@ -504,132 +593,111 @@ private fun DynamicScriptsTabContent(
 
         item {
             ScriptCard(
-                title = "🔔 Test Android Toast & Haptic Hook",
-                description = "Dispatches a native Android screen Toast notification and triggers tactile vibration.",
-                buttonLabel = "Test Dispatch",
-                onClick = {
-                    onTestHaptic()
-                    onTestToast("Venice AI native Android hook executed successfully.")
-                }
+                title = "🔤 Batch Regex Pattern Replacer",
+                description = "Applies custom regex string substitution across all Markdown files in the vault.",
+                buttonLabel = "Configure & Run",
+                onClick = { showRegexDialog = true }
             )
         }
 
         item {
-            ScriptCard(
-                title = "📤 Test System Intent Share",
-                description = "Opens the native Android system share dialog.",
-                buttonLabel = "Test Share",
-                onClick = {
-                    onShareContent("Shared via Venice AI Obsidian Vault native Android skill.")
-                }
+            Text(
+                text = "INTERACTIVE OS HOOK TESTING",
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.1.sp, color = ObsidianTextSecondary, fontWeight = FontWeight.Bold)
             )
         }
-    }
-}
 
-@Composable
-private fun KnowledgeBaseTabContent(knowledgeBase: List<AndroidKnowledgeTopic>) {
-    var searchQuery by remember { mutableStateOf("") }
-    val filtered = remember(searchQuery, knowledgeBase) {
-        if (searchQuery.isBlank()) knowledgeBase
-        else knowledgeBase.filter {
-            it.title.contains(searchQuery, ignoreCase = true) ||
-            it.summary.contains(searchQuery, ignoreCase = true) ||
-            it.category.contains(searchQuery, ignoreCase = true)
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Search Android architecture knowledge...", fontSize = 12.sp) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = ObsidianTextSecondary) },
-            singleLine = true,
-            shape = RoundedCornerShape(8.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = ObsidianSurfaceElevated,
-                unfocusedContainerColor = ObsidianSurfaceElevated,
-                focusedBorderColor = ObsidianPurple,
-                unfocusedBorderColor = ObsidianBorder
-            ),
-            modifier = Modifier.fillMaxWidth().height(48.dp)
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(filtered, key = { it.id }) { topic ->
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(ObsidianBorder))
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(ObsidianBorder))
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { onTestToast("Venice AI Android Hook Active") },
+                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianPurple),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Text(
-                                text = topic.title,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                color = ObsidianTextPrimary,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Surface(
-                                color = ObsidianPurpleContainer,
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    text = topic.category,
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = ObsidianPurpleLight,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                )
-                            }
+                            Icon(Icons.Default.Notifications, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Trigger Toast", fontSize = 11.sp)
                         }
 
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = topic.summary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = ObsidianTeal
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = topic.details,
-                            fontSize = 11.sp,
-                            color = ObsidianTextSecondary,
-                            lineHeight = 16.sp
-                        )
-
-                        if (topic.codeSnippet.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Surface(
-                                color = ObsidianBackground,
-                                shape = RoundedCornerShape(6.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = topic.codeSnippet,
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = ObsidianYellow,
-                                    modifier = Modifier.padding(8.dp)
-                                )
-                            }
+                        Button(
+                            onClick = onTestHaptic,
+                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianTeal),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Vibration, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Tactile Haptic", fontSize = 11.sp)
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = { onShareContent("Obsidian Vault: Knowledge Architecture on Android\nPersisted to external storage with Inotify Hot-Reloading.") },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ObsidianTextPrimary),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Dispatch Native Android Share Sheet", fontSize = 12.sp)
                     }
                 }
             }
         }
+    }
+
+    if (showRegexDialog) {
+        AlertDialog(
+            onDismissRequest = { showRegexDialog = false },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val params = JSONObject().apply {
+                            put("pattern", regexPattern)
+                            put("replacement", regexReplacement)
+                        }
+                        onExecuteDynamicScript("regex_replace", params)
+                        showRegexDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ObsidianPurple)
+                ) {
+                    Text("Execute Replace")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRegexDialog = false }) {
+                    Text("Cancel", color = ObsidianTextSecondary)
+                }
+            },
+            title = { Text("Batch Regex Replacement") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Enter regular expression pattern and replacement string to apply across all vault notes:", fontSize = 12.sp, color = ObsidianTextSecondary)
+                    OutlinedTextField(
+                        value = regexPattern,
+                        onValueChange = { regexPattern = it },
+                        label = { Text("Regex Pattern") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = regexReplacement,
+                        onValueChange = { regexReplacement = it },
+                        label = { Text("Replacement String") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            containerColor = ObsidianSurfaceElevated,
+            titleContentColor = ObsidianTextPrimary
+        )
     }
 }
 
@@ -642,29 +710,59 @@ private fun ScriptCard(
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
-        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(ObsidianBorder))
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ObsidianTextPrimary)
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(text = description, fontSize = 11.sp, color = ObsidianTextSecondary)
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(text = title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = ObsidianTextPrimary)
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(text = description, fontSize = 11.sp, color = ObsidianTextSecondary)
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(
+                    onClick = onClick,
+                    colors = ButtonDefaults.buttonColors(containerColor = ObsidianPurple),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier.height(26.dp)
+                ) {
+                    Text(buttonLabel, fontSize = 10.sp)
+                }
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(
-                onClick = onClick,
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ObsidianPurple),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                modifier = Modifier.height(32.dp)
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeBaseTabContent(knowledge: List<AndroidKnowledgeTopic>) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(knowledge, key = { it.id }) { topic ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
+                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(ObsidianBorder))
             ) {
-                Text(text = buttonLabel, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(text = topic.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = ObsidianTextPrimary)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(text = topic.summary, fontSize = 11.sp, color = ObsidianTextSecondary)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        color = ObsidianBackground,
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = topic.codeSnippet,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = ObsidianPurpleLight,
+                            modifier = Modifier.padding(6.dp)
+                        )
+                    }
+                }
             }
         }
     }

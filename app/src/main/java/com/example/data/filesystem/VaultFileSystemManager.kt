@@ -4,6 +4,9 @@ import android.content.Context
 import android.os.Environment
 import com.example.data.local.VaultDao
 import com.example.data.model.VaultNote
+import com.example.data.scripts.DynamicRuleEngine
+import com.example.data.scripts.DynamicScriptRule
+import com.example.data.scripts.ScriptExecutionSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -20,6 +23,8 @@ class VaultFileSystemManager(
     private val context: Context,
     private val vaultDao: VaultDao
 ) {
+    val dynamicRuleEngine = DynamicRuleEngine()
+
     val vaultRoot: File get() {
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val publicVault = File(downloadDir, "ObsidianVault")
@@ -30,7 +35,9 @@ class VaultFileSystemManager(
             // Ensure essential system directories exist on external storage
             File(publicVault, ".database").apply { if (!exists()) mkdirs() }
             File(publicVault, ".auth").apply { if (!exists()) mkdirs() }
+            File(publicVault, ".config").apply { if (!exists()) mkdirs() }
             File(publicVault, ".chat").apply { if (!exists()) mkdirs() }
+            File(publicVault, ".scripts").apply { if (!exists()) mkdirs() }
             File(publicVault, ".diagnostics").apply { if (!exists()) mkdirs() }
 
             publicVault
@@ -42,13 +49,42 @@ class VaultFileSystemManager(
         }
     }
 
+    val scriptsDir: File get() = File(vaultRoot, ".scripts").apply { if (!exists()) mkdirs() }
+    val configDir: File get() = File(vaultRoot, ".config").apply { if (!exists()) mkdirs() }
     val vaultAbsolutePath: String get() = vaultRoot.absolutePath
 
     private val wikilinkPattern = Pattern.compile("\\[\\[(.*?)\\]\\]")
     private val tagPattern = Pattern.compile("(?<!\\S)#([a-zA-Z0-9_-]+)")
 
+    fun getDynamicScripts(): List<DynamicScriptRule> {
+        return dynamicRuleEngine.loadAllScripts(scriptsDir)
+    }
+
+    suspend fun executeDynamicScriptFile(scriptIdOrName: String): ScriptExecutionSummary = withContext(Dispatchers.IO) {
+        val scripts = getDynamicScripts()
+        val targetRule = scripts.find { it.id.equals(scriptIdOrName, ignoreCase = true) || File(it.filePath).name.equals(scriptIdOrName, ignoreCase = true) }
+        if (targetRule != null) {
+            val summary = dynamicRuleEngine.executeRuleAcrossVault(targetRule, vaultRoot)
+            if (summary.filesModified > 0) {
+                syncFilesystemToDatabase()
+            }
+            summary
+        } else {
+            ScriptExecutionSummary(
+                scriptName = scriptIdOrName,
+                filesExamined = 0,
+                filesModified = 0,
+                details = "Script rule '$scriptIdOrName' not found in $vaultAbsolutePath/.scripts/",
+                success = false
+            )
+        }
+    }
+
     suspend fun initializeDefaultVaultIfEmpty() = withContext(Dispatchers.IO) {
         val root = vaultRoot
+
+        // Initialize starter scripts in /storage/emulated/0/Download/ObsidianVault/.scripts/
+        dynamicRuleEngine.initializeStarterScripts(scriptsDir)
 
         // Migrate any legacy data if previously stored in internal app filesDir
         val legacyDir = File(context.filesDir, "ObsidianVault")
@@ -151,7 +187,7 @@ class VaultFileSystemManager(
             """
             # Vault Architecture
             
-            #systems #architecture #filesystem #storage #database
+            #systems #architecture #filesystem #storage #database #scripts
             
             The Obsidian Vault on Android implements a root-level storage topology directly on external storage:
             
@@ -160,11 +196,14 @@ class VaultFileSystemManager(
             - **Database**: `/storage/emulated/0/Download/ObsidianVault/.database/vault_storage.db`
             - **Auth & Persona Config**: `/storage/emulated/0/Download/ObsidianVault/.auth/vault_auth_config.json`
             - **Chat History**: `/storage/emulated/0/Download/ObsidianVault/.chat/chat_history.json`
+            - **Dynamic Scripts & Rules**: `/storage/emulated/0/Download/ObsidianVault/.scripts/`
             - **Wiki & Notes**: `/storage/emulated/0/Download/ObsidianVault/Wiki/`
             
-            ## Dual-Layer Persistence
-            1. **Physical Filesystem**: Source of truth stored as clean Markdown (`.md`) files on external storage. Accessible by any third-party markdown editor or file manager.
-            2. **Room Database**: High-speed indexing engine for graph traversal, tag filtering, and instant full-text lookups.
+            ## Dual-Layer Persistence & Inotify Hot-Reloading
+            1. **Physical Filesystem**: Source of truth stored as clean Markdown (`.md`) files on external storage. Accessible by Termux, Markor, Obsidian, or any external file editor.
+            2. **Inotify / FileObserver**: Live kernel directory watchers intercept external modifications in real time, hot-reloading JSON auth config and updating notes with zero app restarts.
+            3. **Dynamic Rule Plugins**: JSON rules in `.scripts/` (`auto_tagger.json`, `concept_auto_linker.json`) run automations on note saves.
+            4. **Room Database**: High-speed indexing engine for graph traversal, tag filtering, and instant full-text lookups.
             
             ## Connected Subsystems
             - [[Semantic Search]]: Token indexing and vector similarity scoring.
@@ -206,6 +245,8 @@ class VaultFileSystemManager(
               - [x] External storage synchronization (`/storage/emulated/0/Download/ObsidianVault`)
               - [x] Disk-backed SQLite Database (`.database/vault_storage.db`)
               - [x] External Chat & Auth storage (`.chat/` & `.auth/`)
+              - [x] Dynamic Scripting Engine (`.scripts/`)
+              - [x] Live Inotify / FileObserver Hot-Reloading
               - [x] Interactive Graph View
               - [ ] Expand your digital garden
             - Tags: e.g. `#concepts`, `#ai`, `#systems`
@@ -219,11 +260,13 @@ class VaultFileSystemManager(
             """
             # Daily Note - 2026-09-27
             
-            #daily #log #research #storage
+            #daily #log #research #storage #inotify
             
             - Configured full vault filesystem persistence in `/storage/emulated/0/Download/ObsidianVault`.
             - Mounted Room SQLite database at `/storage/emulated/0/Download/ObsidianVault/.database/vault_storage.db`.
             - Verified Auth config at `.auth/vault_auth_config.json` and Chat history at `.chat/chat_history.json`.
+            - Active Inotify FileObserver hot-reloads configuration and script changes in realtime.
+            - Dynamic JSON rule automations armed in `.scripts/`.
             - Tested [[Knowledge Graphs]] physics layout and node degree sizing.
             - Enabled [[Venice AI]] unfiltered persona for dialectic wiki queries.
             - Verified bidirectional backlinks across [[Vault Architecture]] and [[Semantic Search]].
@@ -235,7 +278,7 @@ class VaultFileSystemManager(
 
     suspend fun syncFilesystemToDatabase(): Int = withContext(Dispatchers.IO) {
         val root = vaultRoot
-        // Ignore dot folders (.database, .auth, .chat, .diagnostics)
+        // Ignore dot folders (.database, .auth, .config, .chat, .scripts, .diagnostics)
         val mdFiles = root.walkTopDown()
             .filter { file ->
                 file.isFile &&
@@ -317,15 +360,24 @@ class VaultFileSystemManager(
         file.parentFile?.mkdirs()
         file.writeText(newContent)
 
+        // Execute "on_note_saved" dynamic rules automatically
+        val scripts = getDynamicScripts().filter { it.trigger == "on_note_saved" && it.isEnabled }
+        for (rule in scripts) {
+            dynamicRuleEngine.executeRuleOnNote(rule, file, vaultRoot)
+        }
+
+        // Read final content after potential rule modifications
+        val finalContent = file.readText()
+
         // Re-extract tags and outlinks
         val tags = mutableSetOf<String>()
-        val tagMatcher = tagPattern.matcher(newContent)
+        val tagMatcher = tagPattern.matcher(finalContent)
         while (tagMatcher.find()) {
             tagMatcher.group(1)?.let { tags.add(it) }
         }
 
         val outlinks = mutableListOf<String>()
-        val linkMatcher = wikilinkPattern.matcher(newContent)
+        val linkMatcher = wikilinkPattern.matcher(finalContent)
         while (linkMatcher.find()) {
             val raw = linkMatcher.group(1)
             if (!raw.isNullOrBlank()) {
@@ -337,7 +389,7 @@ class VaultFileSystemManager(
         }
 
         val updated = note.copy(
-            content = newContent,
+            content = finalContent,
             lastModified = file.lastModified(),
             sizeBytes = file.length(),
             tags = tags.toList().sorted(),
@@ -361,12 +413,19 @@ class VaultFileSystemManager(
         val defaultContent = if (initialContent.isNotBlank()) initialContent else "# ${targetFile.nameWithoutExtension}\n\n"
         targetFile.writeText(defaultContent)
 
+        // Execute "on_note_saved" dynamic rules
+        val scripts = getDynamicScripts().filter { it.trigger == "on_note_saved" && it.isEnabled }
+        for (rule in scripts) {
+            dynamicRuleEngine.executeRuleOnNote(rule, targetFile, vaultRoot)
+        }
+        val finalContent = targetFile.readText()
+
         val relativePath = targetFile.relativeTo(vaultRoot).path
         val newNote = VaultNote(
             path = relativePath,
             title = targetFile.nameWithoutExtension,
             folder = if (folder.isBlank()) "Root" else folder,
-            content = defaultContent,
+            content = finalContent,
             lastModified = targetFile.lastModified(),
             sizeBytes = targetFile.length(),
             tags = emptyList(),
@@ -467,13 +526,15 @@ class VaultFileSystemManager(
         val dbFile = File(vaultRoot, ".database/vault_storage.db")
         val authFile = File(vaultRoot, ".auth/vault_auth_config.json")
         val chatFile = File(vaultRoot, ".chat/chat_history.json")
+        val scripts = getDynamicScripts()
 
         buildString {
-            appendLine("### 🛠️ Obsidian Vault Storage Topology Audit")
+            appendLine("### 🛠️ Obsidian Vault Storage & Inotify Audit")
             appendLine("- 📂 **Vault Root**: `$vaultAbsolutePath`")
             appendLine("- 🗄️ **SQLite DB**: `${dbFile.absolutePath}` (${if (dbFile.exists()) "${dbFile.length() / 1024} KB" else "Ready"})")
             appendLine("- 🔐 **Auth & Persona Config**: `${authFile.absolutePath}` (${if (authFile.exists()) "Active" else "Default"})")
             appendLine("- 💬 **Chat Persistence**: `${chatFile.absolutePath}` (${if (chatFile.exists()) "${chatFile.length()} bytes" else "Ready"})")
+            appendLine("- 📜 **Active Dynamic Scripts**: ${scripts.size} rules in `.scripts/`")
             appendLine("- 📝 **Total Notes**: ${notes.size}")
             appendLine("- 📖 **Total Word Count**: $totalWords words")
             appendLine("- 💾 **Markdown Documents Footprint**: ${totalBytes / 1024} KB")

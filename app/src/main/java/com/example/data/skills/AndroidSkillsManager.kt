@@ -639,7 +639,16 @@ class AndroidSkillsManager(private val context: Context) {
             }
 
             else -> {
-                executeHook(scriptId, vaultDir, params)
+                val scriptsDir = File(vaultDir, ".scripts")
+                val ruleEngine = com.example.data.scripts.DynamicRuleEngine()
+                val customRules = ruleEngine.loadAllScripts(scriptsDir)
+                val matching = customRules.find { it.id.equals(scriptId, ignoreCase = true) || File(it.filePath).name.equals(scriptId, ignoreCase = true) }
+                if (matching != null) {
+                    val summary = ruleEngine.executeRuleAcrossVault(matching, vaultDir)
+                    "✅ **Dynamic Script [${matching.name}] Executed**: Examined ${summary.filesExamined} files, modified ${summary.filesModified} notes. ${summary.details}"
+                } else {
+                    executeHook(scriptId, vaultDir, params)
+                }
             }
         }
     }

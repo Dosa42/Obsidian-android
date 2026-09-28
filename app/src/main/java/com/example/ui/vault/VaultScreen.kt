@@ -48,6 +48,7 @@ fun VaultScreen(
     val runtimeJvmInfo by viewModel.runtimeJvmInfo.collectAsStateWithLifecycle()
     val hardwareSensorsInfo by viewModel.hardwareSensorsInfo.collectAsStateWithLifecycle()
     val storageAudit by viewModel.storageAudit.collectAsStateWithLifecycle()
+    val dynamicScripts by viewModel.dynamicScripts.collectAsStateWithLifecycle()
 
     var showAndroidSkillsDialog by remember { mutableStateOf(false) }
     var showStorageAuthDialog by remember { mutableStateOf(false) }
@@ -354,6 +355,7 @@ fun VaultScreen(
     if (showAndroidSkillsDialog) {
         AndroidSkillsDialog(
             skillsCatalog = viewModel.skillsCatalog,
+            dynamicScriptRules = dynamicScripts,
             telemetry = deviceTelemetry,
             displayMetrics = displayMetrics,
             runtimeJvm = runtimeJvmInfo,
@@ -365,6 +367,11 @@ fun VaultScreen(
             },
             onExecuteDynamicScript = { scriptId, params ->
                 viewModel.executeDynamicScript(scriptId, params)
+                showAndroidSkillsDialog = false
+                viewModel.selectTab(VaultTab.WIKI)
+            },
+            onExecuteCustomRule = { rule ->
+                viewModel.runDynamicScriptRule(rule)
                 showAndroidSkillsDialog = false
                 viewModel.selectTab(VaultTab.WIKI)
             },

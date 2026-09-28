@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.config.VaultAuthConfig
+import com.example.data.filesystem.VaultFileObserverManager
+import com.example.data.filesystem.VaultFileSystemEvent
 import com.example.data.filesystem.VaultFileSystemManager
 import com.example.data.gemini.GeminiService
 import com.example.data.local.VaultDatabase
@@ -15,6 +17,7 @@ import com.example.data.model.VaultNote
 import com.example.data.repository.SearchResult
 import com.example.data.repository.VaultGraphData
 import com.example.data.repository.VaultRepository
+import com.example.data.scripts.DynamicScriptRule
 import com.example.data.skills.AndroidKnowledgeTopic
 import com.example.data.skills.AndroidSkillDefinition
 import com.example.data.skills.DeviceTelemetry
@@ -40,6 +43,8 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val fileSystemManager = VaultFileSystemManager(application, database.vaultDao())
     private val repository = VaultRepository(database.vaultDao(), fileSystemManager, application)
     private val geminiService = GeminiService()
+
+    private val fileObserverManager = VaultFileObserverManager(fileSystemManager.vaultRoot, viewModelScope)
 
     val authConfig: StateFlow<VaultAuthConfig> = repository.authConfig
 
@@ -84,6 +89,10 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     private val _syncMessage = MutableStateFlow<String?>(null)
     val syncMessage: StateFlow<String?> = _syncMessage.asStateFlow()
 
+    // Dynamic scripts
+    private val _dynamicScripts = MutableStateFlow<List<DynamicScriptRule>>(emptyList())
+    val dynamicScripts: StateFlow<List<DynamicScriptRule>> = _dynamicScripts.asStateFlow()
+
     // Graph Data
     private val _graphData = MutableStateFlow(VaultGraphData(emptyList(), emptyList()))
     val graphData: StateFlow<VaultGraphData> = _graphData.asStateFlow()
@@ -112,7 +121,32 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             // Load chat history from /storage/emulated/0/Download/ObsidianVault/.chat/chat_history.json
             val loadedChat = repository.loadChatHistory()
             _chatMessages.value = loadedChat
+            refreshDynamicScripts()
             syncFilesystem()
+
+            // Start inotify FileObserver monitoring
+            fileObserverManager.startWatching()
+        }
+
+        // Collect inotify file observer events for real-time hot-reloading
+        viewModelScope.launch {
+            fileObserverManager.eventsFlow.collect { event ->
+                when (event) {
+                    is VaultFileSystemEvent.ConfigModified -> {
+                        val reloaded = repository.reloadAuthConfig()
+                        _syncMessage.value = "⚡ Inotify Hot-Reloaded: ${reloaded.personaName} (${reloaded.defaultModel})"
+                        showToast("Hot-reloaded auth config from disk")
+                    }
+                    is VaultFileSystemEvent.ScriptsModified -> {
+                        refreshDynamicScripts()
+                        _syncMessage.value = "⚡ Dynamic script rules reloaded from .scripts/"
+                    }
+                    is VaultFileSystemEvent.NoteModified, is VaultFileSystemEvent.GenericModified -> {
+                        repository.syncVault()
+                        _syncMessage.value = "⚡ External disk change synchronized"
+                    }
+                }
+            }
         }
 
         viewModelScope.launch {
@@ -127,6 +161,15 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        fileObserverManager.stopWatching()
+    }
+
+    fun refreshDynamicScripts() {
+        _dynamicScripts.value = repository.getDynamicScripts()
     }
 
     fun selectTab(tab: VaultTab) {
@@ -221,6 +264,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             _syncMessage.value = "Indexing /storage/emulated/0/Download/ObsidianVault..."
             try {
                 val count = repository.syncVault()
+                refreshDynamicScripts()
                 _syncMessage.value = "Storage synced: $count markdown notes indexed."
             } catch (e: Exception) {
                 _syncMessage.value = "Sync notice: ${e.message}"
@@ -296,6 +340,30 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 showToast("Backup failed: ${e.message}")
             }
+        }
+    }
+
+    fun runDynamicScriptRule(rule: DynamicScriptRule) {
+        viewModelScope.launch {
+            _isChatLoading.value = true
+            val summary = repository.executeDynamicScriptFile(rule.id)
+            val msg = ChatMessage(
+                role = "model",
+                text = "### ⚡ Dynamic Rule Executed: ${summary.scriptName}\n\n- **Files Examined**: ${summary.filesExamined}\n- **Files Mutated**: ${summary.filesModified}\n- **Details**: ${summary.details}",
+                executedTools = listOf(
+                    ToolExecutionResult(
+                        action = "dynamic_script_file",
+                        target = rule.name,
+                        details = summary.details,
+                        success = summary.success
+                    )
+                )
+            )
+            val updated = _chatMessages.value + msg
+            _chatMessages.value = updated
+            repository.saveChatHistory(updated)
+            syncFilesystem()
+            _isChatLoading.value = false
         }
     }
 

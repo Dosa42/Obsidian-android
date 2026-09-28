@@ -11,6 +11,8 @@ import com.example.data.model.ChatMessage
 import com.example.data.model.GraphEdge
 import com.example.data.model.GraphNode
 import com.example.data.model.VaultNote
+import com.example.data.scripts.DynamicScriptRule
+import com.example.data.scripts.ScriptExecutionSummary
 import com.example.data.skills.AndroidKnowledgeTopic
 import com.example.data.skills.AndroidSkillDefinition
 import com.example.data.skills.AndroidSkillsManager
@@ -41,7 +43,7 @@ data class VaultGraphData(
 
 class VaultRepository(
     private val vaultDao: VaultDao,
-    private val fileSystemManager: VaultFileSystemManager,
+    val fileSystemManager: VaultFileSystemManager,
     private val context: Context
 ) {
     val authConfigManager = VaultAuthConfigManager(context)
@@ -52,6 +54,16 @@ class VaultRepository(
     val androidKnowledgeBase: List<AndroidKnowledgeTopic> get() = skillsManager.androidKnowledgeBase
 
     val authConfig: StateFlow<VaultAuthConfig> get() = authConfigManager.configFlow
+
+    fun getDynamicScripts(): List<DynamicScriptRule> = fileSystemManager.getDynamicScripts()
+
+    suspend fun executeDynamicScriptFile(scriptId: String): ScriptExecutionSummary {
+        return fileSystemManager.executeDynamicScriptFile(scriptId)
+    }
+
+    suspend fun reloadAuthConfig(): VaultAuthConfig {
+        return authConfigManager.reloadFromDisk()
+    }
 
     fun getDeviceTelemetry(): DeviceTelemetry = skillsManager.getDeviceTelemetry()
     fun getDisplayMetrics(): DisplayMetricsInfo = skillsManager.getDisplayMetrics()
@@ -74,6 +86,7 @@ class VaultRepository(
     val allNotes: Flow<List<VaultNote>> = vaultDao.getAllNotes()
     val bookmarkedNotes: Flow<List<VaultNote>> = vaultDao.getBookmarkedNotes()
     val vaultAbsolutePath: String get() = fileSystemManager.vaultAbsolutePath
+    val vaultRoot: File get() = fileSystemManager.vaultRoot
 
     suspend fun initialize() {
         authConfigManager.initialize()

@@ -4,10 +4,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -20,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,7 +71,7 @@ fun WikiChatView(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(14.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -103,20 +106,21 @@ fun WikiChatView(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    color = ObsidianPurpleContainer,
-                                    shape = RoundedCornerShape(4.dp)
+                                    color = ObsidianGreen.copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = androidx.compose.foundation.BorderStroke(0.5.dp, ObsidianGreen)
                                 ) {
                                     Text(
-                                        text = "Objective",
-                                        fontSize = 10.sp,
+                                        text = "Root Tools Active",
+                                        fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = ObsidianPurpleLight,
-                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                        color = ObsidianGreen,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                     )
                                 }
                             }
                             Text(
-                                text = "Raw, direct dialectic · Zero lecturing",
+                                text = "Zero lecturing · Direct tool execution · Disk-backed",
                                 fontSize = 11.sp,
                                 color = ObsidianTextSecondary
                             )
@@ -174,12 +178,15 @@ fun WikiChatView(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Action Row
+                // Horizontally Scrollable Action Row
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     FilterChip(
                         selected = askVaultEnabled,
@@ -220,7 +227,7 @@ fun WikiChatView(
                     ) {
                         Icon(Icons.Default.MenuBook, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Synthesize Wiki Node", fontSize = 11.sp)
+                        Text("Synthesize Node", fontSize = 11.sp)
                     }
 
                     OutlinedButton(
@@ -236,7 +243,7 @@ fun WikiChatView(
                     ) {
                         Icon(Icons.Default.Build, contentDescription = null, tint = ObsidianTeal, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Audit Vault", fontSize = 11.sp)
+                        Text("Storage Audit", fontSize = 11.sp)
                     }
 
                     OutlinedButton(
@@ -292,10 +299,50 @@ fun WikiChatView(
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text(
-                            text = "Venice AI synthesizing response...",
+                            text = "Venice AI processing & executing system tools...",
                             style = MaterialTheme.typography.bodySmall.copy(color = ObsidianTextMuted)
                         )
                     }
+                }
+            }
+        }
+
+        // Tool Quick Actions Bar
+        Surface(
+            color = ObsidianSurfaceElevated,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Quick Tools:",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = ObsidianTextMuted
+                )
+                QuickToolPill("⚡ Telemetry") {
+                    onSendMessage("Execute tool_call: get_device_telemetry and give me a brief summary.", false)
+                }
+                QuickToolPill("🗄️ Storage Audit") {
+                    onSendMessage("Audit the Obsidian Vault filesystem and database health.", false)
+                }
+                QuickToolPill("📝 Create Note") {
+                    onSendMessage("Create a new note titled 'Cognitive Architecture' in folder 'Concepts' with relevant wikilinks and tags.", false)
+                }
+                QuickToolPill("🗺️ Generate MOC") {
+                    onSendMessage("Execute dynamic script generate_moc_index to create a Map of Content.", false)
+                }
+                QuickToolPill("📱 Sensors") {
+                    onSendMessage("Execute tool_call: get_hardware_sensors to inspect phone hardware.", false)
+                }
+                QuickToolPill("📊 JVM Heap") {
+                    onSendMessage("Execute tool_call: get_runtime_jvm to inspect thread count and memory.", false)
                 }
             }
         }
@@ -318,7 +365,7 @@ fun WikiChatView(
                     onValueChange = { inputText = it },
                     placeholder = {
                         Text(
-                            text = if (askVaultEnabled) "Ask vault with RAG..." else "Query Venice AI directly...",
+                            text = if (askVaultEnabled) "Ask vault with RAG or command tools..." else "Command Venice AI (tool calls enabled)...",
                             color = ObsidianTextMuted,
                             fontSize = 13.sp
                         )
@@ -422,6 +469,23 @@ fun WikiChatView(
 }
 
 @Composable
+private fun QuickToolPill(label: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        color = ObsidianSurface,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(0.8.dp, ObsidianBorder)
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = ObsidianTextPrimary,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
 fun ChatMessageItem(
     message: ChatMessage,
     onWikilinkClicked: (String) -> Unit,
@@ -453,7 +517,7 @@ fun ChatMessageItem(
         }
 
         Column(
-            modifier = Modifier.widthIn(max = 320.dp),
+            modifier = Modifier.widthIn(max = 340.dp),
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
         ) {
             Card(
@@ -488,7 +552,7 @@ fun ChatMessageItem(
                 }
             }
 
-            // Executed System Developer Tools
+            // Executed System Developer Tools & Android Skills
             if (message.executedTools.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Column(
@@ -553,6 +617,7 @@ fun ChatMessageItem(
                                     Text(
                                         text = tool.details,
                                         fontSize = 10.sp,
+                                        fontFamily = FontFamily.Monospace,
                                         color = ObsidianTextSecondary,
                                         modifier = Modifier.padding(top = 2.dp)
                                     )

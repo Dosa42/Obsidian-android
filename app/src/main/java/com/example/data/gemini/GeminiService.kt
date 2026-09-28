@@ -3,9 +3,11 @@ package com.example.data.gemini
 import android.util.Log
 import com.example.BuildConfig
 import com.example.data.config.VaultAuthConfig
+import com.example.data.model.BacklinkItem
 import com.example.data.model.ChatMessage
 import com.example.data.model.GeminiModel
 import com.example.data.model.VaultNote
+import com.example.data.repository.SearchResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -16,101 +18,200 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+data class ActiveViewContext(
+    val viewType: String = "WIKI", // "GRAPH", "EDITOR", "SEARCH", "EXPLORER", "WIKI"
+    val activeNote: VaultNote? = null,
+    val linkedMentions: List<BacklinkItem> = emptyList(),
+    val unlinkedMentions: List<BacklinkItem> = emptyList(),
+    val searchQuery: String = "",
+    val searchResults: List<SearchResult> = emptyList(),
+    val totalNodesCount: Int = 0,
+    val totalEdgesCount: Int = 0,
+    val topHubNotes: List<String> = emptyList()
+)
+
 class GeminiService {
+    private val TAG = "GeminiService"
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    val defaultVeniceSystemPrompt = """
+    val defaultVenicePersona = """
         You are Venice AI, a private, uncensored, objective, and intellectually rigorous AI System Developer with ROOT-LEVEL FULL PERMISSION ACCESS to the user's local Obsidian Vault on disk (/storage/emulated/0/Download/ObsidianVault).
         
         Ethos & Communication:
         - Give direct, factual, nuanced answers without moralizing, preachy lecturing, or unsolicited disclaimers.
         - High signal-to-noise ratio. Always respect user autonomy and privacy.
         - When citing notes, use standard wikilink format: [[Note Title]].
-        
-        System Developer Tools & Autonomous Execution:
-        You have direct tool execution permissions over the filesystem. Whenever the user requests creating notes, updating notes, deleting notes, refactoring wikilinks, creating folders, or inspecting the vault, invoke tools by outputting fenced tool_call blocks in your response:
-        
-        To create or update a note:
+    """.trimIndent()
+
+    val developerToolsSchema = """
+        ### Autonomous Developer Tools & Filesystem Bridge:
+        You have direct tool execution permissions over the filesystem at `/storage/emulated/0/Download/ObsidianVault`.
+        Whenever the user asks to create, update, delete, rename, refactor wikilinks, create folders, inspect vault health, or interact with Android OS hardware/telemetry, invoke the corresponding fenced `tool_call` blocks in your response:
+
+        1. To create or overwrite a note:
         ```tool_call
-        {"action": "create_note", "title": "Note Title", "folder": "Folder Name", "content": "# Markdown content with [[wikilinks]]"}
+        {"action": "create_note", "title": "Note Title", "folder": "Folder Name", "content": "# Markdown content with [[wikilinks]]\n\n#tags"}
         ```
-        
-        To delete a note:
+
+        2. To update an existing note:
+        ```tool_call
+        {"action": "update_note", "title": "Note Title", "content": "# Updated content"}
+        ```
+
+        3. To delete a note:
         ```tool_call
         {"action": "delete_note", "title": "Note Title"}
         ```
-        
-        To create a directory:
+
+        4. To create a subdirectory in the vault:
         ```tool_call
         {"action": "create_folder", "folder": "Folder Name"}
         ```
-        
-        To batch refactor/rename a wikilink across all vault documents:
+
+        5. To batch refactor/rename a wikilink across all vault markdown documents:
         ```tool_call
-        {"action": "refactor_links", "old_title": "Old Name", "new_title": "New Name"}
+        {"action": "refactor_links", "old_title": "Old Note Name", "new_title": "New Note Name"}
         ```
-        
-        To run a full system health & storage audit:
+
+        6. To run a full system health, database & broken-links storage audit:
         ```tool_call
         {"action": "run_diagnostic"}
         ```
-        
-        Native Android Skills & OS Bridge Hooks:
-        You have direct access to native Android OS skills. You can execute:
-        - Inspect device telemetry (RAM, battery %, CPU ABI, OS level, network state):
+
+        7. Native Android OS Skills, Dynamic Scripts & Hardware Hooks:
+        - Device Telemetry:
         ```tool_call
         {"action": "android_skill", "skill": "get_device_telemetry"}
         ```
-        - Inspect display metrics (resolution, DPI, density scale, orientation):
+        - Display Metrics:
         ```tool_call
         {"action": "android_skill", "skill": "get_display_metrics"}
         ```
-        - Inspect JVM runtime (heap free/total/max, active threads, available cores):
+        - JVM Runtime Heap & Threads:
         ```tool_call
         {"action": "android_skill", "skill": "get_runtime_jvm"}
         ```
-        - Inspect hardware sensors (accelerometer, gyroscope, light, proximity):
+        - Hardware Sensors:
         ```tool_call
         {"action": "android_skill", "skill": "get_hardware_sensors"}
         ```
-        - Inspect physical disk partition and storage audit:
+        - Storage Partition Audit:
         ```tool_call
         {"action": "android_skill", "skill": "get_storage_audit"}
         ```
-        - Copy text to the Android system clipboard:
+        - System Clipboard Write:
         ```tool_call
-        {"action": "android_skill", "skill": "clipboard_write", "text": "Content"}
+        {"action": "android_skill", "skill": "clipboard_write", "text": "Content to copy"}
         ```
-        - Trigger a native Android Toast alert:
+        - Android Toast:
         ```tool_call
-        {"action": "android_skill", "skill": "trigger_toast", "message": "Notification text"}
+        {"action": "android_skill", "skill": "trigger_toast", "message": "Notification message"}
         ```
-        - Trigger tactile haptic vibration:
+        - Tactile Haptic:
         ```tool_call
         {"action": "android_skill", "skill": "trigger_haptic", "duration_ms": 60}
         ```
-        - Trigger native Android Share Sheet:
+        - Android Share Sheet:
         ```tool_call
         {"action": "android_skill", "skill": "share_content", "text": "Note text", "title": "Share Title"}
         ```
-        - Execute DYNAMIC VAULT SCRIPTS & AUTOMATION HOOKS:
+        - Execute Dynamic Script Rule from `.scripts/`:
         ```tool_call
-        {"action": "android_skill", "skill": "execute_dynamic_script", "script": "todo_aggregator"}
+        {"action": "android_skill", "skill": "execute_dynamic_script", "script": "auto_tagger"}
         ```
-        *(Available dynamic scripts: `todo_aggregator`, `frontmatter_injector`, `word_frequency_analyzer`, `export_vault_json`, `wikilink_normalizer`, `backup_vault`, `generate_moc_index`, `clean_empty_files`, `regex_replace`)*
-        
-        You may invoke multiple tool calls in a single turn. You can also mix markdown explanations with tool_call blocks.
+        *(Available dynamic scripts: `auto_tagger`, `concept_auto_linker`, `task_normalizer`, `format_cleaner`, `todo_aggregator`, `frontmatter_injector`, `word_frequency_analyzer`, `export_vault_json`, `wikilink_normalizer`, `backup_vault`, `generate_moc_index`, `clean_empty_files`, `regex_replace`)*
+
+        Always emit both direct markdown explanation and the necessary tool_call blocks when an action is requested.
     """.trimIndent()
+
+    fun buildAdaptiveSystemInstruction(
+        authConfig: VaultAuthConfig?,
+        vaultNotesContext: List<VaultNote>,
+        activeViewContext: ActiveViewContext? = null,
+        fewShotSampleNotes: List<VaultNote> = emptyList(),
+        contextBudget: Int = 8192
+    ): String {
+        val userPersona = authConfig?.systemPrompt?.ifBlank { defaultVenicePersona } ?: defaultVenicePersona
+        val sb = StringBuilder()
+        sb.appendLine(userPersona)
+        sb.appendLine()
+        sb.appendLine(developerToolsSchema)
+        sb.appendLine()
+
+        // 1. Dynamic Active View Context Injection
+        if (activeViewContext != null) {
+            sb.appendLine("### 👁️ Realtime Active View Context (${activeViewContext.viewType}):")
+            when (activeViewContext.viewType) {
+                "GRAPH" -> {
+                    sb.appendLine("- **Active Screen**: Knowledge Graph View")
+                    sb.appendLine("- **Topology**: ${activeViewContext.totalNodesCount} nodes, ${activeViewContext.totalEdgesCount} directed wikilink edges.")
+                    sb.appendLine("- **Key Hub Nodes**: ${activeViewContext.topHubNotes.joinToString(", ") { "[[$it]]" }}")
+                    sb.appendLine("- **Analysis Mode**: Focus on node centrality, clustering coefficients, and bridging disconnected thematic islands.")
+                }
+                "EDITOR" -> {
+                    val note = activeViewContext.activeNote
+                    if (note != null) {
+                        sb.appendLine("- **Currently Editing Note**: [[${note.title}]] (Path: `${note.path}`)")
+                        sb.appendLine("- **Tags**: ${note.tags.joinToString(", ") { "#$it" }}")
+                        sb.appendLine("- **Linked Mentions (Inbound/Outbound)**: ${activeViewContext.linkedMentions.take(4).joinToString(", ") { "[[${it.note.title}]]" }}")
+                        if (activeViewContext.unlinkedMentions.isNotEmpty()) {
+                            sb.appendLine("- **Discovered Unlinked Mentions in Vault**: ${activeViewContext.unlinkedMentions.take(4).joinToString(", ") { "[[${it.note.title}]]" }}")
+                        }
+                    }
+                }
+                "SEARCH" -> {
+                    sb.appendLine("- **Active Search Query**: \"${activeViewContext.searchQuery}\"")
+                    if (activeViewContext.searchResults.isNotEmpty()) {
+                        sb.appendLine("- **Top Ranked Search Hits**: " + activeViewContext.searchResults.take(3).joinToString(", ") { "[[${it.note.title}]] (Score: ${String.format("%.1f", it.score)})" })
+                    }
+                }
+                "EXPLORER" -> {
+                    sb.appendLine("- **Active Screen**: File Tree Explorer (/storage/emulated/0/Download/ObsidianVault)")
+                    sb.appendLine("- **Focus**: Folder taxonomy, directory hierarchy, and atomic note organization.")
+                }
+                else -> {
+                    sb.appendLine("- **Active Screen**: Venice AI Knowledge Coprocessor")
+                }
+            }
+            sb.appendLine()
+        }
+
+        // 2. Dynamic Few-Shot Style Ingestion (Adapting to User's Personal Writing Tone)
+        if (fewShotSampleNotes.isNotEmpty()) {
+            sb.appendLine("### ✍️ User Stylistic & Taxonomy Calibration (Few-Shot Style Ingestion):")
+            sb.appendLine("Adapt tone, tag naming conventions, and wikilink density to match the user's primary writing style:")
+            fewShotSampleNotes.take(3).forEach { sample ->
+                sb.appendLine("- [[${sample.title}]]: Tags=[${sample.tags.joinToString(", ")}], StyleSnippet=\"${sample.content.take(180).replace("\n", " ").trim()}...\"")
+            }
+            sb.appendLine()
+        }
+
+        // 3. Vault Knowledge Context (budgeted)
+        if (vaultNotesContext.isNotEmpty()) {
+            val perNoteMaxChars = (contextBudget / (vaultNotesContext.size.coerceAtLeast(1) * 2)).coerceIn(400, 2000)
+            val vaultSummary = vaultNotesContext.take(6).joinToString("\n\n") { note ->
+                "--- Ingested Note: [[${note.title}]] (Path: ${note.path}) ---\n" +
+                        note.content.take(perNoteMaxChars)
+            }
+            sb.appendLine("### Current Ingested Vault Knowledge Context (/storage/emulated/0/Download/ObsidianVault):")
+            sb.appendLine(vaultSummary)
+        }
+
+        return sb.toString()
+    }
 
     suspend fun generateResponse(
         messages: List<ChatMessage>,
         userPrompt: String,
         model: GeminiModel = GeminiModel.FLASH_3_5,
         vaultNotesContext: List<VaultNote> = emptyList(),
+        activeViewContext: ActiveViewContext? = null,
+        fewShotSampleNotes: List<VaultNote> = emptyList(),
         authConfig: VaultAuthConfig? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         val apiKey = when {
@@ -125,19 +226,45 @@ class GeminiService {
             )
         }
 
-        try {
+        val endpoint = authConfig?.endpoint?.ifBlank { "https://generativelanguage.googleapis.com/v1beta" } ?: "https://generativelanguage.googleapis.com/v1beta"
+        val cleanEndpoint = endpoint.removeSuffix("/")
+        val targetModelId = if (authConfig?.activeModel?.isNotBlank() == true) authConfig.activeModel else model.modelId
+        val fallbackModelId = authConfig?.fallbackModel?.ifBlank { "gemini-2.5-flash" } ?: "gemini-2.5-flash"
+        val budget = authConfig?.dynamicContextBudget ?: 8192
+
+        // First attempt with primary target model
+        val firstResult = executeApiCall(cleanEndpoint, targetModelId, apiKey, messages, userPrompt, vaultNotesContext, activeViewContext, fewShotSampleNotes, authConfig, budget)
+        if (firstResult.isSuccess) {
+            return@withContext firstResult
+        }
+
+        // Automatic Dynamic Failover to fallback model if first call failed
+        Log.w(TAG, "Primary model $targetModelId failed (${firstResult.exceptionOrNull()?.message}). Attempting dynamic failover to $fallbackModelId...")
+        val fallbackResult = executeApiCall(cleanEndpoint, fallbackModelId, apiKey, messages, userPrompt, vaultNotesContext, activeViewContext, fewShotSampleNotes, authConfig, budget)
+        if (fallbackResult.isSuccess) {
+            return@withContext Result.success("*(⚡ Dynamic Failover: Served by fallback model `$fallbackModelId`)*\n\n" + fallbackResult.getOrNull())
+        }
+
+        firstResult
+    }
+
+    private fun executeApiCall(
+        endpoint: String,
+        modelId: String,
+        apiKey: String,
+        messages: List<ChatMessage>,
+        userPrompt: String,
+        vaultNotesContext: List<VaultNote>,
+        activeViewContext: ActiveViewContext?,
+        fewShotSampleNotes: List<VaultNote>,
+        authConfig: VaultAuthConfig?,
+        contextBudget: Int
+    ): Result<String> {
+        return try {
             val root = JSONObject()
 
-            // System Instruction
-            var systemContent = authConfig?.systemPrompt?.ifBlank { defaultVeniceSystemPrompt } ?: defaultVeniceSystemPrompt
-            if (vaultNotesContext.isNotEmpty()) {
-                val vaultSummary = vaultNotesContext.take(6).joinToString("\n\n") { note ->
-                    "--- Vault Note: [[${note.title}]] (Path: ${note.path}) ---\n" +
-                            note.content.take(1200)
-                }
-                systemContent += "\n\n### Current Ingested Vault Knowledge Context (/storage/emulated/0/Download/ObsidianVault):\n$vaultSummary"
-            }
-
+            // Build complete instruction with Active View and Few-Shot Ingestion
+            val systemContent = buildAdaptiveSystemInstruction(authConfig, vaultNotesContext, activeViewContext, fewShotSampleNotes, contextBudget)
             val systemObj = JSONObject()
             val systemParts = JSONArray().put(JSONObject().put("text", systemContent))
             systemObj.put("parts", systemParts)
@@ -165,11 +292,11 @@ class GeminiService {
 
             // Generation config
             val genConfig = JSONObject()
-                .put("temperature", authConfig?.temperature ?: 0.7)
+                .put("temperature", authConfig?.temperature ?: 0.65)
                 .put("topP", authConfig?.topP ?: 0.95)
             root.put("generationConfig", genConfig)
 
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/${model.modelId}:generateContent?key=$apiKey"
+            val url = "$endpoint/models/$modelId:generateContent?key=$apiKey"
             val requestBody = root.toString().toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
@@ -181,8 +308,8 @@ class GeminiService {
             val responseString = response.body?.string() ?: ""
 
             if (!response.isSuccessful) {
-                Log.e("GeminiService", "API error: ${response.code} $responseString")
-                return@withContext Result.failure(Exception("API returned code ${response.code}: $responseString"))
+                Log.e(TAG, "API error on model $modelId: ${response.code} $responseString")
+                return Result.failure(Exception("API ($modelId) returned code ${response.code}: $responseString"))
             }
 
             val jsonResponse = JSONObject(responseString)
@@ -193,13 +320,13 @@ class GeminiService {
                 val parts = contentObj?.optJSONArray("parts")
                 if (parts != null && parts.length() > 0) {
                     val text = parts.getJSONObject(0).optString("text", "")
-                    return@withContext Result.success(text)
+                    return Result.success(text)
                 }
             }
 
-            Result.failure(Exception("Empty candidate response from Gemini API"))
+            Result.failure(Exception("Empty candidate response from Gemini API ($modelId)"))
         } catch (e: Exception) {
-            Log.e("GeminiService", "Error calling Gemini", e)
+            Log.e(TAG, "Error calling model $modelId at $endpoint", e)
             Result.failure(e)
         }
     }
@@ -221,6 +348,10 @@ class GeminiService {
                 IllegalStateException("Gemini API key is not configured.")
             )
         }
+
+        val endpoint = authConfig?.endpoint?.ifBlank { "https://generativelanguage.googleapis.com/v1beta" } ?: "https://generativelanguage.googleapis.com/v1beta"
+        val cleanEndpoint = endpoint.removeSuffix("/")
+        val modelId = if (authConfig?.activeModel?.isNotBlank() == true) authConfig.activeModel else model.modelId
 
         try {
             val contextText = if (relatedNotes.isNotEmpty()) {
@@ -255,7 +386,7 @@ class GeminiService {
                 .put("topP", 0.95)
             root.put("generationConfig", genConfig)
 
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/${model.modelId}:generateContent?key=$apiKey"
+            val url = "$cleanEndpoint/models/$modelId:generateContent?key=$apiKey"
             val requestBody = root.toString().toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
@@ -306,6 +437,9 @@ class GeminiService {
             )
         }
 
+        val endpoint = authConfig?.endpoint?.ifBlank { "https://generativelanguage.googleapis.com/v1beta" } ?: "https://generativelanguage.googleapis.com/v1beta"
+        val cleanEndpoint = endpoint.removeSuffix("/")
+
         try {
             val prompt = """
                 Analyze the following note: "$noteTitle" and suggest bidirectional [[wikilinks]] that should be added to enrich the knowledge graph.
@@ -328,7 +462,7 @@ class GeminiService {
                 .put("parts", JSONArray().put(JSONObject().put("text", prompt)))
             root.put("contents", JSONArray().put(contentObj))
 
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+            val url = "$cleanEndpoint/models/gemini-3.5-flash:generateContent?key=$apiKey"
             val requestBody = root.toString().toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
