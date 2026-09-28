@@ -212,6 +212,54 @@ class AndroidBridge(
     }
 
     @JavascriptInterface
+    fun getVaultChatHistoryJson(): String {
+        return try {
+            val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+            val vaultDir = File(downloadDir, "ObsidianVault")
+            val chatFile = File(File(vaultDir, ".chat"), "chat_history.json")
+            if (chatFile.exists()) {
+                chatFile.readText()
+            } else {
+                "[]"
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed reading vault chat history", e)
+            "[]"
+        }
+    }
+
+    @JavascriptInterface
+    fun saveMessageToVault(role: String, text: String, model: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val downloadDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                val vaultDir = File(downloadDir, "ObsidianVault")
+                val chatDir = File(vaultDir, ".chat").apply { if (!exists()) mkdirs() }
+                val chatFile = File(chatDir, "chat_history.json")
+                val list = if (chatFile.exists() && chatFile.length() > 0) {
+                    try { org.json.JSONArray(chatFile.readText()) } catch (_: Exception) { org.json.JSONArray() }
+                } else {
+                    org.json.JSONArray()
+                }
+
+                val msgObj = JSONObject().apply {
+                    put("id", java.util.UUID.randomUUID().toString())
+                    put("role", role)
+                    put("text", text)
+                    put("timestamp", System.currentTimeMillis())
+                    put("isSynthesizing", false)
+                    put("citedNotes", org.json.JSONArray())
+                    put("executedTools", org.json.JSONArray())
+                }
+                list.put(msgObj)
+                chatFile.writeText(list.toString(2))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed saving message to vault", e)
+            }
+        }
+    }
+
+    @JavascriptInterface
     fun stopLoopbackServer() {
         chatGPTAuthManager.stopLoopbackServer()
     }

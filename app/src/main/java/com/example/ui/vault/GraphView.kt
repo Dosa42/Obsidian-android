@@ -41,8 +41,10 @@ import com.example.data.model.VaultNote
 import com.example.data.repository.VaultGraphData
 import com.example.ui.theme.*
 import com.example.ui.vault.graph.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import java.util.ArrayDeque
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -108,153 +110,21 @@ fun GraphView(
     // Tick counter to trigger smooth observable recomposition on Canvas
     var simTick by remember { mutableIntStateOf(0) }
 
-    // Force-directed layout physics simulation loop
-    LaunchedEffect(
-        forces.isSimulating,
-        forces.centerForce,
-        forces.repelForce,
-        forces.linkForce,
-        forces.linkDistance,
-        forces.damping,
-        graphData.edges,
-        display.isEcoMode
-    ) {
-        if (!forces.isSimulating) return@LaunchedEffect
+    // Content map for full Obsidian query filtering and content matching
+    val noteContentMap = remember(allNotes) { allNotes.associate { it.path to it.content } }
 
-        val kCenter = forces.centerForce
-        val kRepel = forces.repelForce
-        val kSpring = forces.linkForce
-        val targetDist = forces.linkDistance
-        val damping = forces.damping
-        val frameDelay = if (display.isEcoMode) 33L else 16L // 30fps on eco/low battery, 60fps on normal
-
-        var consecutiveQuietSteps = 0
-
-        while (isActive && forces.isSimulating) {
-            val nodeMap = localNodes.associateBy { it.id }
-            var totalMovement = 0f
-
-            // 1. Repulsion between node pairs (with distance cutoff threshold for high performance)
-            val maxRepelDist = 450f
-            val maxRepelDistSq = maxRepelDist * maxRepelDist
-
-            for (i in 0 until localNodes.size) {
-                val n1 = localNodes[i]
-                for (j in i + 1 until localNodes.size) {
-                    val n2 = localNodes[j]
-                    val dx = n2.x - n1.x
-                    val dy = n2.y - n1.y
-                    val distSq = dx * dx + dy * dy
-                    if (distSq > maxRepelDistSq) continue // Distance cutoff
-
-                    val dist = sqrt(distSq).coerceAtLeast(15f)
-                    val force = kRepel / (dist * dist)
-                    val fx = (dx / dist) * force
-                    val fy = (dy / dist) * force
-                    n1.vx -= fx
-                    n1.vy -= fy
-                    n2.vx += fx
-                    n2.vy += fy
-                }
-            }
-
-            // 2. Spring attraction along edges
-            for (edge in graphData.edges) {
-                val s = nodeMap[edge.sourceId]
-                val t = nodeMap[edge.targetId]
-                if (s != null && t != null) {
-                    val dx = t.x - s.x
-                    val dy = t.y - s.y
-                    val dist = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
-                    val displacement = dist - targetDist
-                    val force = displacement * kSpring
-                    val fx = (dx / dist) * force
-                    val fy = (dy / dist) * force
-                    s.vx += fx
-                    s.vy += fy
-                    t.vx -= fx
-                    t.vy -= fy
-                }
-            }
-
-            // 3. Center gravity & integrate velocities
-            for (node in localNodes) {
-                if (node.id != draggedNodeId && !node.isPinned) {
-                    node.vx -= node.x * kCenter
-                    node.vy -= node.y * kCenter
-                    node.vx *= damping
-                    node.vy *= damping
-                    node.x += node.vx
-                    node.y += node.vy
-                    totalMovement += sqrt(node.vx * node.vx + node.vy * node.vy)
-                } else {
-                    node.vx = 0f
-                    node.vy = 0f
-                }
-            }
-
-            simTick++
-
-            // Settle check: if settled and no dragging, sleep longer
-            if (draggedNodeId == null && totalMovement < 0.25f) {
-                consecutiveQuietSteps++
-                if (consecutiveQuietSteps > 60) {
-                    delay(200L) // Idle sleep until interaction
-                    continue
-                }
-            } else {
-                consecutiveQuietSteps = 0
-            }
-
-            delay(frameDelay)
-        }
-    }
-
-    // Save node positions periodically when settled or dragging ends
-    LaunchedEffect(draggedNodeId) {
-        if (draggedNodeId == null && localNodes.isNotEmpty()) {
-            val snapshot = localNodes.associate { it.id to Pair(it.x, it.y) }
-            onSavePositions(snapshot)
-        }
-    }
-
-    // Calculate Active & Filtered Nodes
-    val visibleNodes = remember(localNodes, filters, display, selectedNodeId, activeNote, simTick) {
-        // Base filtering
-        var nodes = localNodes.filter { node ->
-            when (node.nodeType) {
-                GraphNodeType.NOTE -> filters.showExistingNotes
-                GraphNodeType.UNRESOLVED -> filters.showUnresolvedNotes
-                GraphNodeType.TAG -> filters.showTags
-                GraphNodeType.ATTACHMENT -> filters.showAttachments
-            }
-        }
-
-        // Orphan filter
-        if (!filters.showOrphans) {
-            nodes = nodes.filter { it.degree > 0 }
-        }
-
-        // Search query filter
-        if (filters.searchQuery.isNotBlank()) {
-            val q = filters.searchQuery.trim().lowercase()
-            nodes = nodes.filter {
-                it.title.lowercase().contains(q) ||
-                        it.folder.lowercase().contains(q) ||
-                        it.path.lowercase().contains(q) ||
-                        it.tags.any { t -> t.lowercase().contains(q) }
-            }
-        }
-
-        // Local Graph BFS Neighborhood filter
-        if (display.isLocalGraph) {
+    // BFS Reachable Subgraph for Local Graph isolation
+    val localReachableIds = remember(display.isLocalGraph, display.localGraphDepth, selectedNodeId, activeNote, graphData.edges) {
+        if (!display.isLocalGraph) {
+            null
+        } else {
             val focusId = selectedNodeId
                 ?: activeNote?.path
                 ?: activeNote?.title
-                ?: nodes.firstOrNull()?.id
-
-            if (focusId != null) {
-                // BFS up to localGraphDepth
+                ?: graphData.nodes.firstOrNull()?.id
+            if (focusId == null) {
+                null
+            } else {
                 val reachableIds = mutableSetOf<String>()
                 reachableIds.add(focusId)
 
@@ -278,9 +148,118 @@ fun GraphView(
                         }
                     }
                 }
-
-                nodes = nodes.filter { reachableIds.contains(it.id) }
+                reachableIds
             }
+        }
+    }
+
+    // Force-directed layout physics simulation loop running on background coroutine
+    LaunchedEffect(
+        forces.isSimulating,
+        forces.centerForce,
+        forces.repelForce,
+        forces.linkForce,
+        forces.linkDistance,
+        forces.damping,
+        graphData.edges,
+        display.isEcoMode,
+        display.isLocalGraph,
+        localReachableIds
+    ) {
+        if (!forces.isSimulating) return@LaunchedEffect
+
+        val frameDelay = if (display.isEcoMode) 33L else 16L // 30fps on eco mode, 60fps on normal
+        var consecutiveQuietSteps = 0
+
+        withContext(Dispatchers.Default) {
+            val physicsEngine = GraphPhysicsEngine(
+                centerForce = forces.centerForce,
+                repelForce = forces.repelForce,
+                linkForce = forces.linkForce,
+                linkDistance = forces.linkDistance,
+                damping = forces.damping,
+                maxRepelDistance = if (display.isEcoMode) 320f else 420f
+            )
+
+            while (isActive && forces.isSimulating) {
+                // When in Local Graph mode, simulate ONLY the active reachable neighborhood!
+                val simNodes = if (display.isLocalGraph && localReachableIds != null) {
+                    localNodes.filter { localReachableIds.contains(it.id) }
+                } else {
+                    localNodes
+                }
+
+                val simNodeIds = simNodes.map { it.id }.toSet()
+                val simEdges = graphData.edges.filter {
+                    simNodeIds.contains(it.sourceId) && simNodeIds.contains(it.targetId)
+                }
+
+                // Execute O(N) spatial grid simulation step
+                val totalMovement = physicsEngine.step(simNodes, simEdges, draggedNodeId)
+
+                // Dispatch recomposition tick to UI thread
+                withContext(Dispatchers.Main) {
+                    simTick++
+                }
+
+                // Settle detection & durable position persistence
+                if (draggedNodeId == null && totalMovement < 0.25f) {
+                    consecutiveQuietSteps++
+                    // Persist settled positions to disk upon reaching rest
+                    if (consecutiveQuietSteps == 30) {
+                        val snapshot = localNodes.associate { it.id to Pair(it.x, it.y) }
+                        withContext(Dispatchers.Main) {
+                            onSavePositions(snapshot)
+                        }
+                    }
+                    if (consecutiveQuietSteps > 30) {
+                        delay(200L) // Idle sleep until user drag or configuration change
+                        continue
+                    }
+                } else {
+                    consecutiveQuietSteps = 0
+                }
+
+                delay(frameDelay)
+            }
+        }
+    }
+
+    // Save node positions immediately after user drag interaction finishes
+    LaunchedEffect(draggedNodeId) {
+        if (draggedNodeId == null && localNodes.isNotEmpty()) {
+            val snapshot = localNodes.associate { it.id to Pair(it.x, it.y) }
+            onSavePositions(snapshot)
+        }
+    }
+
+    // Calculate Active & Filtered Nodes using full Obsidian search query syntax
+    val visibleNodes = remember(localNodes, filters, display, selectedNodeId, activeNote, localReachableIds, simTick) {
+        // Base filtering by node type
+        var nodes = localNodes.filter { node ->
+            when (node.nodeType) {
+                GraphNodeType.NOTE -> filters.showExistingNotes
+                GraphNodeType.UNRESOLVED -> filters.showUnresolvedNotes
+                GraphNodeType.TAG -> filters.showTags
+                GraphNodeType.ATTACHMENT -> filters.showAttachments
+            }
+        }
+
+        // Orphan filter
+        if (!filters.showOrphans) {
+            nodes = nodes.filter { it.degree > 0 }
+        }
+
+        // Full Obsidian search query filter (supports file:, path:, tag:, content:, negation -, bare words)
+        if (filters.searchQuery.isNotBlank()) {
+            nodes = nodes.filter { node ->
+                ObsidianGraphQueryParser.matches(node, noteContentMap[node.path], filters.searchQuery)
+            }
+        }
+
+        // Local Graph BFS Neighborhood filter
+        if (display.isLocalGraph && localReachableIds != null) {
+            nodes = nodes.filter { localReachableIds.contains(it.id) }
         }
 
         nodes
@@ -518,7 +497,7 @@ fun GraphView(
                 val isConnectedNeighbor = selectedConnectedIds.contains(node.id)
                 val isDimmed = selectedNodeId != null && !isConnectedNeighbor
 
-                val nodeBaseColor = resolveNodeColor(node, colorGroups)
+                val nodeBaseColor = resolveNodeColor(node, colorGroups, noteContentMap[node.path])
                 val drawColor = if (isDimmed) nodeBaseColor.copy(alpha = 0.22f) else nodeBaseColor
 
                 // Outer Halo if selected
@@ -558,11 +537,28 @@ fun GraphView(
                         )
                     }
                     GraphNodeType.TAG -> {
-                        // Tags drawn as diamond/pill
+                        // Tags drawn as pill/circle
                         drawCircle(
                             color = drawColor,
                             radius = baseRadius * 0.85f,
                             center = Offset(nx, ny)
+                        )
+                    }
+                    GraphNodeType.ATTACHMENT -> {
+                        // Attachments drawn as diamond with contrasting border
+                        val s = baseRadius * 1.15f
+                        val diamondPath = Path().apply {
+                            moveTo(nx, ny - s)
+                            lineTo(nx + s, ny)
+                            lineTo(nx, ny + s)
+                            lineTo(nx - s, ny)
+                            close()
+                        }
+                        drawPath(diamondPath, color = drawColor)
+                        drawPath(
+                            diamondPath,
+                            color = ObsidianTextPrimary.copy(alpha = 0.7f),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.6f * scale)
                         )
                     }
                     else -> {
@@ -749,7 +745,7 @@ fun GraphView(
                                 modifier = Modifier
                                     .size(12.dp)
                                     .clip(CircleShape)
-                                    .background(resolveNodeColor(node, colorGroups))
+                                    .background(resolveNodeColor(node, colorGroups, noteContentMap[node.path]))
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
@@ -774,12 +770,16 @@ fun GraphView(
                                 text = when (node.nodeType) {
                                     GraphNodeType.UNRESOLVED -> "⚠️ Unresolved Link (Not created)"
                                     GraphNodeType.TAG -> "🏷️ Tag Node"
-                                    GraphNodeType.ATTACHMENT -> "📎 Attachment"
+                                    GraphNodeType.ATTACHMENT -> "📎 Attachment File"
                                     GraphNodeType.NOTE -> "📁 ${node.folder}"
                                 },
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (node.nodeType == GraphNodeType.UNRESOLVED) Color(0xFFF59E0B) else ObsidianTextSecondary
+                                color = when (node.nodeType) {
+                                    GraphNodeType.UNRESOLVED -> Color(0xFFF59E0B)
+                                    GraphNodeType.ATTACHMENT -> Color(0xFFE5A93C)
+                                    else -> ObsidianTextSecondary
+                                }
                             )
                             Text("·", fontSize = 12.sp, color = ObsidianTextMuted)
                             Text("${node.degree} links", fontSize = 12.sp, color = ObsidianPurpleLight)
@@ -837,6 +837,26 @@ fun GraphView(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Create Note in Vault", fontSize = 12.sp, color = Color.Black, fontWeight = FontWeight.Bold)
                             }
+                        } else if (node.nodeType == GraphNodeType.ATTACHMENT) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Media / Document attachment in vault (${node.path}). Linked in ${node.degree} notes.",
+                                fontSize = 12.sp,
+                                color = ObsidianTextMuted
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    display = display.copy(isLocalGraph = true)
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = ObsidianTextPrimary),
+                                modifier = Modifier.fillMaxWidth().testTag("graph_focus_attachment_button")
+                            ) {
+                                Icon(Icons.Default.CenterFocusStrong, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Focus Local Graph on Attachment", fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -863,30 +883,11 @@ fun GraphView(
 }
 
 // Helper to resolve node colors from custom Color Groups or default Obsidian palette
-private fun resolveNodeColor(node: GraphNode, colorGroups: List<GraphColorGroup>): Color {
-    // 1. Check custom color group rules
+private fun resolveNodeColor(node: GraphNode, colorGroups: List<GraphColorGroup>, noteContent: String?): Color {
+    // 1. Check custom color group rules using Obsidian graph query engine
     for (group in colorGroups) {
-        val q = group.query.trim().lowercase()
-        when {
-            q.startsWith("folder:") -> {
-                val targetFolder = q.removePrefix("folder:").trim()
-                if (node.folder.equals(targetFolder, ignoreCase = true)) return group.color
-            }
-            q.startsWith("tag:") -> {
-                val targetTag = q.removePrefix("tag:").removePrefix("#").trim()
-                if (node.tags.any { it.removePrefix("#").equals(targetTag, ignoreCase = true) }) return group.color
-            }
-            q == "type:unresolved" -> {
-                if (node.nodeType == GraphNodeType.UNRESOLVED) return group.color
-            }
-            q == "type:tag" -> {
-                if (node.nodeType == GraphNodeType.TAG) return group.color
-            }
-            else -> {
-                if (node.title.contains(q, ignoreCase = true) || node.path.contains(q, ignoreCase = true)) {
-                    return group.color
-                }
-            }
+        if (ObsidianGraphQueryParser.matches(node, noteContent, group.query)) {
+            return group.color
         }
     }
 
@@ -894,7 +895,7 @@ private fun resolveNodeColor(node: GraphNode, colorGroups: List<GraphColorGroup>
     return when (node.nodeType) {
         GraphNodeType.UNRESOLVED -> Color(0xFFF59E0B) // Amber for ghost links
         GraphNodeType.TAG -> ObsidianCyan
-        GraphNodeType.ATTACHMENT -> ObsidianRed
+        GraphNodeType.ATTACHMENT -> Color(0xFFE5A93C) // Warm amber for attachments
         GraphNodeType.NOTE -> when (node.folder) {
             "Concepts" -> ObsidianPurple
             "Systems" -> ObsidianTeal

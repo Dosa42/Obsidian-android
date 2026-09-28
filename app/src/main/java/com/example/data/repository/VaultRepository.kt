@@ -278,18 +278,67 @@ class VaultRepository(
         Pair(linkedMentions, unlinkedMentions)
     }
 
-    private val nodePositionCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Float, Float>>()
+    private val positionsFile: File
+        get() = File(fileSystemManager.configDir, "graph_positions.json")
 
-    fun updateCachedNodePositions(positions: Map<String, Pair<Float, Float>>) {
-        nodePositionCache.putAll(positions)
+    private val nodePositionCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Float, Float>>()
+    private var positionsLoaded = false
+
+    private fun ensurePositionsLoaded() {
+        if (positionsLoaded) return
+        positionsLoaded = true
+        try {
+            val file = positionsFile
+            if (file.exists()) {
+                val jsonStr = file.readText()
+                if (jsonStr.isNotBlank()) {
+                    val obj = JSONObject(jsonStr)
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val arr = obj.optJSONArray(key)
+                        if (arr != null && arr.length() >= 2) {
+                            val x = arr.optDouble(0, 0.0).toFloat()
+                            val y = arr.optDouble(1, 0.0).toFloat()
+                            nodePositionCache[key] = Pair(x, y)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("VaultRepository", "Failed loading graph_positions.json", e)
+        }
     }
 
-    // Build Graph Data with stable IDs, unresolved links, tags, and cached coordinates
+    fun updateCachedNodePositions(positions: Map<String, Pair<Float, Float>>) {
+        ensurePositionsLoaded()
+        nodePositionCache.putAll(positions)
+        try {
+            val file = positionsFile
+            file.parentFile?.mkdirs()
+            val obj = JSONObject()
+            nodePositionCache.forEach { (id, pair) ->
+                val arr = org.json.JSONArray().apply {
+                    put(pair.first.toDouble())
+                    put(pair.second.toDouble())
+                }
+                obj.put(id, arr)
+            }
+            file.writeText(obj.toString())
+        } catch (e: Exception) {
+            android.util.Log.e("VaultRepository", "Failed saving graph_positions.json", e)
+        }
+    }
+
+    // Build Graph Data with stable IDs, unresolved links, tags, attachments, and persisted coordinates
     fun buildGraph(
         allNotes: List<VaultNote>,
         includeUnresolved: Boolean = true,
-        includeTags: Boolean = true
+        includeTags: Boolean = true,
+        includeAttachments: Boolean = true
     ): VaultGraphData {
+        ensurePositionsLoaded()
+
         // Fast lookups for note resolution by path and title
         val pathToNote = allNotes.associateBy { it.path.lowercase() }
         val titleToNote = allNotes.associateBy { it.title.lowercase() }
@@ -298,8 +347,19 @@ class VaultRepository(
         val edges = mutableListOf<GraphEdge>()
         val unresolvedNodesMap = mutableMapOf<String, GraphNode>()
         val tagNodesMap = mutableMapOf<String, GraphNode>()
+        val attachmentNodesMap = mutableMapOf<String, GraphNode>()
 
-        // 1. Process all notes and edges
+        val attachmentExts = setOf(
+            "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico",
+            "mp3", "wav", "m4a", "ogg", "flac", "aac",
+            "mp4", "webm", "mkv", "mov",
+            "pdf", "canvas", "zip"
+        )
+
+        val embedPattern = Pattern.compile("!\\[\\[(.*?)\\]\\]")
+        val mdImagePattern = Pattern.compile("!\\[.*?\\]\\((.*?)\\)")
+
+        // 1. Process all notes, links, tags, and embedded attachments
         for (note in allNotes) {
             val sourceId = note.path.ifBlank { note.title }
             degrees.putIfAbsent(sourceId, 0)
@@ -309,6 +369,29 @@ class VaultRepository(
                 if (cleanLink.isBlank()) continue
 
                 val targetKey = cleanLink.lowercase()
+                val targetExt = if (targetKey.contains(".")) targetKey.substringAfterLast(".") else ""
+
+                if (attachmentExts.contains(targetExt)) {
+                    // Outlink explicitly targets an attachment
+                    if (includeAttachments) {
+                        val attachId = "attachment:$cleanLink"
+                        edges.add(GraphEdge(sourceId = sourceId, targetId = attachId, isResolved = true))
+                        degrees[sourceId] = (degrees[sourceId] ?: 0) + 1
+                        degrees[attachId] = (degrees[attachId] ?: 0) + 1
+
+                        if (!attachmentNodesMap.containsKey(attachId)) {
+                            attachmentNodesMap[attachId] = GraphNode(
+                                id = attachId,
+                                title = File(cleanLink).name,
+                                folder = if (cleanLink.contains("/")) cleanLink.substringBeforeLast("/") else "Attachments",
+                                nodeType = GraphNodeType.ATTACHMENT,
+                                path = cleanLink
+                            )
+                        }
+                    }
+                    continue
+                }
+
                 val targetNote = pathToNote[targetKey]
                     ?: pathToNote["$targetKey.md"]
                     ?: titleToNote[targetKey]
@@ -336,6 +419,51 @@ class VaultRepository(
                 }
             }
 
+            // Embedded attachment references ![[attachment.png]] or ![](attachment.png)
+            if (includeAttachments) {
+                val embedMatcher = embedPattern.matcher(note.content)
+                while (embedMatcher.find()) {
+                    val rawTarget = embedMatcher.group(1)?.split("|")?.first()?.trim() ?: continue
+                    if (rawTarget.isNotBlank()) {
+                        val attachId = "attachment:$rawTarget"
+                        edges.add(GraphEdge(sourceId = sourceId, targetId = attachId, isResolved = true))
+                        degrees[sourceId] = (degrees[sourceId] ?: 0) + 1
+                        degrees[attachId] = (degrees[attachId] ?: 0) + 1
+
+                        if (!attachmentNodesMap.containsKey(attachId)) {
+                            attachmentNodesMap[attachId] = GraphNode(
+                                id = attachId,
+                                title = File(rawTarget).name,
+                                folder = if (rawTarget.contains("/")) rawTarget.substringBeforeLast("/") else "Attachments",
+                                nodeType = GraphNodeType.ATTACHMENT,
+                                path = rawTarget
+                            )
+                        }
+                    }
+                }
+
+                val mdMatcher = mdImagePattern.matcher(note.content)
+                while (mdMatcher.find()) {
+                    val rawTarget = mdMatcher.group(1)?.split(" ")?.first()?.trim() ?: continue
+                    if (rawTarget.isNotBlank() && !rawTarget.startsWith("http://") && !rawTarget.startsWith("https://")) {
+                        val attachId = "attachment:$rawTarget"
+                        edges.add(GraphEdge(sourceId = sourceId, targetId = attachId, isResolved = true))
+                        degrees[sourceId] = (degrees[sourceId] ?: 0) + 1
+                        degrees[attachId] = (degrees[attachId] ?: 0) + 1
+
+                        if (!attachmentNodesMap.containsKey(attachId)) {
+                            attachmentNodesMap[attachId] = GraphNode(
+                                id = attachId,
+                                title = File(rawTarget).name,
+                                folder = if (rawTarget.contains("/")) rawTarget.substringBeforeLast("/") else "Attachments",
+                                nodeType = GraphNodeType.ATTACHMENT,
+                                path = rawTarget
+                            )
+                        }
+                    }
+                }
+            }
+
             // Optional Tag nodes and edges
             if (includeTags) {
                 for (tag in note.tags) {
@@ -359,9 +487,27 @@ class VaultRepository(
             }
         }
 
+        // Include any actual attachment files residing on disk in the vault
+        if (includeAttachments) {
+            val diskAttachments = fileSystemManager.listAttachmentFiles()
+            for (file in diskAttachments) {
+                val relPath = file.relativeTo(vaultRoot).path
+                val attachId = "attachment:$relPath"
+                if (!attachmentNodesMap.containsKey(attachId)) {
+                    attachmentNodesMap[attachId] = GraphNode(
+                        id = attachId,
+                        title = file.name,
+                        folder = if (file.parentFile != null && file.parentFile != vaultRoot) file.parentFile!!.name else "Attachments",
+                        nodeType = GraphNodeType.ATTACHMENT,
+                        path = relPath
+                    )
+                    degrees.putIfAbsent(attachId, 0)
+                }
+            }
+        }
+
         // 2. Assemble note nodes
         val allNodesList = mutableListOf<GraphNode>()
-        val totalExpected = allNotes.size + unresolvedNodesMap.size + tagNodesMap.size
         val goldenAngle = 2.39996322972865332 // Math.PI * (3.0 - Math.sqrt(5.0))
         var placeIndex = 0
 
@@ -440,6 +586,31 @@ class VaultRepository(
 
             allNodesList.add(
                 tNode.copy(
+                    degree = deg,
+                    x = initX,
+                    y = initY
+                )
+            )
+        }
+
+        // 5. Assemble attachment nodes
+        for ((aId, aNode) in attachmentNodesMap) {
+            val deg = degrees[aId] ?: 0
+            val cachedPos = nodePositionCache[aId]
+            val (initX, initY) = if (cachedPos != null) {
+                cachedPos
+            } else {
+                val radius = 130f + Math.sqrt(placeIndex.toDouble()).toFloat() * 85f
+                val theta = (placeIndex * goldenAngle).toFloat()
+                val x = (Math.cos(theta.toDouble()) * radius).toFloat()
+                val y = (Math.sin(theta.toDouble()) * radius).toFloat()
+                nodePositionCache[aId] = Pair(x, y)
+                Pair(x, y)
+            }
+            placeIndex++
+
+            allNodesList.add(
+                aNode.copy(
                     degree = deg,
                     x = initX,
                     y = initY

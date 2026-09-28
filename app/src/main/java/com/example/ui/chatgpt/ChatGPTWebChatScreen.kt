@@ -933,9 +933,30 @@ private fun getChatGptWebHtml(): String {
             }
 
             async loadSession() {
+                // First check if native Android bridge has a session from vault file
+                if (window.AndroidBridge && typeof window.AndroidBridge.getNativeSessionJson === 'function') {
+                    try {
+                        const nativeJson = window.AndroidBridge.getNativeSessionJson();
+                        if (nativeJson && nativeJson.trim()) {
+                            const nativeSession = JSON.parse(nativeJson);
+                            if (nativeSession && nativeSession.accessToken) {
+                                this.session = nativeSession;
+                                await window.chatDb.setSetting('chatgpt_session', nativeSession);
+                                return this.session;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('Failed reading native session:', e);
+                    }
+                }
+
                 const saved = await window.chatDb.getSetting('chatgpt_session', null);
                 if (saved && saved.accessToken) {
                     this.session = saved;
+                    // Sync to native if native session file is not yet populated
+                    if (window.AndroidBridge && typeof window.AndroidBridge.saveNativeSession === 'function') {
+                        try { window.AndroidBridge.saveNativeSession(JSON.stringify(saved)); } catch (_) {}
+                    }
                     if (this.session.expiresAt && Date.now() >= this.session.expiresAt - 120000) {
                         try {
                             await this.refreshToken();
@@ -1069,6 +1090,11 @@ private fun getChatGptWebHtml(): String {
                 await window.chatDb.setSetting('pending_oauth', null);
                 this.pendingAuth = null;
 
+                // Seamlessly synchronize session with native Vault storage
+                if (window.AndroidBridge && typeof window.AndroidBridge.saveNativeSession === 'function') {
+                    try { window.AndroidBridge.saveNativeSession(JSON.stringify(sessionObj)); } catch (_) {}
+                }
+
                 if (window.AndroidBridge && typeof window.AndroidBridge.stopLoopbackServer === 'function') {
                     window.AndroidBridge.stopLoopbackServer();
                 }
@@ -1113,6 +1139,9 @@ private fun getChatGptWebHtml(): String {
                 };
 
                 await window.chatDb.setSetting('chatgpt_session', this.session);
+                if (window.AndroidBridge && typeof window.AndroidBridge.saveNativeSession === 'function') {
+                    try { window.AndroidBridge.saveNativeSession(JSON.stringify(this.session)); } catch (_) {}
+                }
                 return this.session;
             }
 
@@ -1120,6 +1149,9 @@ private fun getChatGptWebHtml(): String {
                 this.session = null;
                 await window.chatDb.setSetting('chatgpt_session', null);
                 await window.chatDb.setSetting('pending_oauth', null);
+                if (window.AndroidBridge && typeof window.AndroidBridge.clearNativeSession === 'function') {
+                    try { window.AndroidBridge.clearNativeSession(); } catch (_) {}
+                }
             }
 
             getApiHeaders() {
@@ -1271,6 +1303,27 @@ private fun getChatGptWebHtml(): String {
                     }
                 }
                 setup();
+
+                window.onNativeSessionUpdated = async (sessionJson) => {
+                    try {
+                        if (sessionJson && sessionJson.trim()) {
+                            const parsed = typeof sessionJson === 'string' ? JSON.parse(sessionJson) : sessionJson;
+                            window.chatAuth.session = parsed;
+                            await window.chatDb.setSetting('chatgpt_session', parsed);
+                            setAuthSession(parsed);
+                            try {
+                                const mList = await window.chatAuth.fetchModels();
+                                if (mList && mList.length > 0) setModels(mList);
+                            } catch (_) {}
+                        } else {
+                            window.chatAuth.session = null;
+                            await window.chatDb.setSetting('chatgpt_session', null);
+                            setAuthSession(null);
+                        }
+                    } catch (err) {
+                        console.warn('onNativeSessionUpdated error:', err);
+                    }
+                };
 
                 window.onOAuthCallbackReceived = async (url) => {
                     try {
@@ -1465,6 +1518,10 @@ private fun getChatGptWebHtml(): String {
                 await window.chatDb.saveMessage(userMessage);
                 await window.chatDb.saveMessage(aiMessage);
 
+                if (window.AndroidBridge && typeof window.AndroidBridge.saveMessageToVault === 'function') {
+                    try { window.AndroidBridge.saveMessageToVault('user', currentText, selectedModel); } catch (_) {}
+                }
+
                 if (titleToUpdate !== currentSession?.title) {
                     const updated = { ...currentSession, title: titleToUpdate, updatedAt: Date.now(), messageCount: newMessages.length };
                     await window.chatDb.saveSession(updated);
@@ -1592,6 +1649,10 @@ private fun getChatGptWebHtml(): String {
                     status: finalStatus,
                     error: error || '',
                 });
+
+                if (!error && finalText && window.AndroidBridge && typeof window.AndroidBridge.saveMessageToVault === 'function') {
+                    try { window.AndroidBridge.saveMessageToVault('model', finalText, selectedModel); } catch (_) {}
+                }
             };
 
             const handleStopStreaming = () => {

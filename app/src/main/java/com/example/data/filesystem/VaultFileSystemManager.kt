@@ -588,4 +588,25 @@ class VaultFileSystemManager(
         }
         zipFile
     }
+
+    fun listAttachmentFiles(): List<File> {
+        val root = vaultRoot
+        val attachmentExts = setOf(
+            "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico",
+            "mp3", "wav", "m4a", "ogg", "flac", "aac",
+            "mp4", "webm", "mkv", "mov",
+            "pdf", "canvas", "zip"
+        )
+        return try {
+            root.walkTopDown()
+                .filter { file ->
+                    file.isFile &&
+                    attachmentExts.contains(file.extension.lowercase()) &&
+                    !file.relativeTo(root).path.split(File.separator).any { it.startsWith(".") }
+                }
+                .toList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
 }
