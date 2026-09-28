@@ -1,0 +1,6 @@
+{
+  "name": "Obsidian Vault",
+  "description": "Obsidian-style knowledge vault with filesystem synchronization, interactive graph view, intelligent semantic search, and Venice Unfiltered LLM wiki.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
