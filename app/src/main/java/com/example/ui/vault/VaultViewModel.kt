@@ -166,8 +166,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 when (event) {
                     is VaultFileSystemEvent.ConfigModified -> {
                         val reloaded = repository.reloadAuthConfig()
-                        _syncMessage.value = "⚡ Inotify Hot-Reloaded: ${reloaded.personaName} (${reloaded.defaultModel})"
-                        showToast("Hot-reloaded auth config from disk")
+                        chatGPTAuthManager.loadSessionFromDisk()
+                        _syncMessage.value = "⚡ Inotify Hot-Reloaded: ${reloaded.personaName} (${reloaded.activeModel})"
+                        showToast("Hot-reloaded auth & session from disk")
                     }
                     is VaultFileSystemEvent.ScriptsModified -> {
                         refreshDynamicScripts()

@@ -11,6 +11,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -77,6 +79,8 @@ class ChatGPTAuthManager(
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    private val refreshMutex = Mutex()
+
     private val authDir: File get() {
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val vaultDir = File(downloadDir, "ObsidianVault")
@@ -85,7 +89,21 @@ class ChatGPTAuthManager(
         return dir
     }
 
-    private val sessionFile: File get() = File(authDir, "chatgpt_session.json")
+    /**
+     * Resolves session file with universal anchor discovery fallback:
+     * 1. Checks active auth directory.
+     * 2. If absent, falls back to universal shared anchor /storage/emulated/0/Download/ObsidianVault/.auth/chatgpt_session.json.
+     */
+    val sessionFile: File get() {
+        val primary = File(authDir, "chatgpt_session.json")
+        if (primary.exists()) return primary
+        val universalFallback = File(
+            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "ObsidianVault/.auth"),
+            "chatgpt_session.json"
+        )
+        return if (universalFallback.exists()) universalFallback else primary
+    }
+
     private val modelsCacheFile: File get() = File(authDir, "chatgpt_models.json")
 
     private val _sessionState = MutableStateFlow<ChatGPTSession?>(null)
@@ -227,7 +245,18 @@ class ChatGPTAuthManager(
                 put("expiresAt", session.expiresAt)
                 put("refreshedAt", session.refreshedAt)
             }
-            sessionFile.writeText(json.toString(2))
+            // Atomic write: write to temp file then rename to prevent half-written reads across processes
+            val targetFile = sessionFile
+            val parentDir = targetFile.parentFile ?: authDir
+            if (!parentDir.exists()) parentDir.mkdirs()
+            val tempFile = File(parentDir, "${targetFile.name}.tmp")
+            tempFile.writeText(json.toString(2))
+            if (tempFile.renameTo(targetFile) || (targetFile.delete() && tempFile.renameTo(targetFile))) {
+                Log.d(TAG, "Atomically saved chatgpt_session.json to ${targetFile.absolutePath}")
+            } else {
+                targetFile.writeText(json.toString(2))
+                tempFile.delete()
+            }
             _sessionState.value = session
         } catch (e: Exception) {
             Log.e(TAG, "Failed saving chatgpt_session.json", e)
@@ -524,55 +553,64 @@ class ChatGPTAuthManager(
     }
 
     suspend fun refreshToken(): Result<ChatGPTSession> = withContext(Dispatchers.IO) {
-        val current = _sessionState.value ?: loadSessionFromDisk() ?: return@withContext Result.failure(IllegalStateException("No session to refresh"))
-        if (current.refreshToken.isBlank()) {
-            return@withContext Result.failure(IllegalStateException("No refresh token available"))
-        }
-
-        try {
-            val jsonPayload = JSONObject().apply {
-                put("grant_type", "refresh_token")
-                put("client_id", current.clientId.ifBlank { PUBLIC_CLIENT_ID })
-                put("refresh_token", current.refreshToken)
+        refreshMutex.withLock {
+            val diskSession = loadSessionFromDisk()
+            if (diskSession != null && diskSession.isValid && diskSession.expiresAt > System.currentTimeMillis() + 60_000) {
+                // Another companion APK or coroutine just refreshed the token; reuse it immediately!
+                _sessionState.value = diskSession
+                return@withLock Result.success(diskSession)
             }
 
-            val request = Request.Builder()
-                .url(TOKEN_URL)
-                .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
-                .header("Content-Type", "application/json")
-                .build()
-
-            val response = okHttpClient.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
-            if (!response.isSuccessful) {
-                throw IOException("Token refresh failed: $responseBody")
+            val current = _sessionState.value ?: diskSession ?: return@withLock Result.failure(IllegalStateException("No session to refresh"))
+            if (current.refreshToken.isBlank()) {
+                return@withLock Result.failure(IllegalStateException("No refresh token available"))
             }
 
-            val tokenJson = JSONObject(responseBody)
-            val newAccess = tokenJson.optString("access_token")
-            val newRefresh = tokenJson.optString("refresh_token", current.refreshToken)
-            val newId = tokenJson.optString("id_token", current.idToken)
-            val expiresIn = tokenJson.optLong("expires_in", 3600L)
+            try {
+                val jsonPayload = JSONObject().apply {
+                    put("grant_type", "refresh_token")
+                    put("client_id", current.clientId.ifBlank { PUBLIC_CLIENT_ID })
+                    put("refresh_token", current.refreshToken)
+                }
 
-            val accessClaims = parseJwt(newAccess)
-            val idClaims = parseJwt(newId)
-            val authClaim = idClaims.optJSONObject("https://api.openai.com/auth") ?: accessClaims.optJSONObject("https://api.openai.com/auth")
+                val request = Request.Builder()
+                    .url(TOKEN_URL)
+                    .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
+                    .header("Content-Type", "application/json")
+                    .build()
 
-            val updated = current.copy(
-                accessToken = newAccess,
-                refreshToken = newRefresh,
-                idToken = newId,
-                accountId = authClaim?.optString("chatgpt_account_id", current.accountId) ?: current.accountId,
-                expiresAt = System.currentTimeMillis() + (expiresIn * 1000),
-                refreshedAt = System.currentTimeMillis()
-            )
+                val response = okHttpClient.newCall(request).execute()
+                val responseBody = response.body?.string() ?: ""
 
-            saveSessionToDisk(updated)
-            Result.success(updated)
-        } catch (e: Exception) {
-            Log.e(TAG, "Refresh token request failed", e)
-            Result.failure(e)
+                if (!response.isSuccessful) {
+                    throw IOException("Token refresh failed: $responseBody")
+                }
+
+                val tokenJson = JSONObject(responseBody)
+                val newAccess = tokenJson.optString("access_token")
+                val newRefresh = tokenJson.optString("refresh_token", current.refreshToken)
+                val newId = tokenJson.optString("id_token", current.idToken)
+                val expiresIn = tokenJson.optLong("expires_in", 3600L)
+
+                val accessClaims = parseJwt(newAccess)
+                val idClaims = parseJwt(newId)
+                val authClaim = idClaims.optJSONObject("https://api.openai.com/auth") ?: accessClaims.optJSONObject("https://api.openai.com/auth")
+
+                val updated = current.copy(
+                    accessToken = newAccess,
+                    refreshToken = newRefresh,
+                    idToken = newId,
+                    accountId = authClaim?.optString("chatgpt_account_id", current.accountId) ?: current.accountId,
+                    expiresAt = System.currentTimeMillis() + (expiresIn * 1000),
+                    refreshedAt = System.currentTimeMillis()
+                )
+
+                saveSessionToDisk(updated)
+                Result.success(updated)
+            } catch (e: Exception) {
+                Log.e(TAG, "Refresh token request failed", e)
+                Result.failure(e)
+            }
         }
     }
 
