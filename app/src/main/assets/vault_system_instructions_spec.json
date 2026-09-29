@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0.0",
+  "document_type": "SYSTEM_INSTRUCTIONS_AND_ARCHITECTURE_SPEC",
+  "project_name": "Obsidian Vault Android & Venice AI Engine",
+  "author": "Venice AI / AI Studio Build",
+  "persona": {
+    "id": "venice_unfiltered",
+    "name": "Venice Unfiltered",
+    "title": "Raw, Objective & Direct",
+    "description": "Zero lecturing, straightforward answers, high signal-to-noise ratio.",
+    "system_prompt": "You are Venice AI, a private, uncensored, objective, and intellectually rigorous AI assistant. Give direct, factual, nuanced answers without moralizing, preachy lecturing, or unsolicited disclaimers. Always respect user autonomy and privacy."
+  },
+  "inviolable_core_principles": [
+    "NEVER_OVERRIDE_STORAGE_SPEC: The physical storage architecture, dual-layer filesystem persistence, and dynamic directory mounting must never be compromised or replaced with volatile/in-memory mocks.",
+    "REAL_EXECUTION_ONLY: Never simulate or fake command execution. All tool calls, bash hooks, file operations, and telemetry queries must invoke actual Android system APIs, Kotlin coroutines, or filesystem operations.",
+    "DYNAMIC_MODELS_ONLY: Never hardcode model lists or endpoints. All AI models (OpenAI Codex/Chat and Google Gemini) must be queried dynamically from live provider endpoints.",
+    "MARKDOWN_IS_SOURCE_OF_TRUTH: All user notes and knowledge items exist as real, readable .md files on device storage. SQLite/Room database is strictly an accelerated indexing and graph-traversal layer."
+  ],
+  "storage_architecture_spec": {
+    "mounting_mechanism": {
+      "saf_contract": "androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree",
+      "uri_resolution": "DocumentContract tree decoding to real filesystem paths (/storage/emulated/0/...)",
+      "persistence": "SharedPreferences key 'custom_vault_path' in 'vault_storage_prefs'",
+      "hot_reload": "FileObserver watching vault directory and dot-subfolders"
+    },
+    "directory_topology": {
+      "root_default": "/storage/emulated/0/Download/ObsidianVault",
+      "root_user_selectable": "Any valid Android filesystem path via SAF or custom path input",
+      "subdirectories": {
+        "database": ".database/vault_storage.db",
+        "auth": ".auth/vault_auth_config.json",
+        "chatgpt_session": ".auth/chatgpt_session.json",
+        "chatgpt_models_cache": ".auth/chatgpt_models.json",
+        "chat_history": ".chat/chat_history.json",
+        "dynamic_scripts": ".scripts/",
+        "diagnostics": ".diagnostics/",
+        "concepts": "Concepts/",
+        "systems": "Systems/",
+        "wiki": "Wiki/",
+        "daily_notes": "Daily Notes/"
+      }
+    },
+    "persistence_contract": {
+      "reinstall_resilience": "Vault data resides directly on shared external storage and survives app updates and reinstalls.",
+      "file_extensions": [".md", ".txt"],
+      "metadata_extraction": {
+        "wikilinks": "\\[\\[(.*?)\\]\\] with target and pipe alias support",
+        "tags": "(?<!\\S)#([a-zA-Z0-9_-]+)"
+      },
+      "database_sync": "Room SQLite sync is bidirectional; deleting or creating a file on disk updates Room on next scan or FileObserver event."
+    }
+  },
+  "ai_provider_and_execution_spec": {
+    "openai_pkce": {
+      "auth_type": "OAuth 2.0 PKCE",
+      "token_storage": ".auth/chatgpt_session.json",
+      "model_fetch_endpoints": [
+        "https://api.openai.com/v1/models",
+        "https://chatgpt.com/backend-api/models",
+        "https://api.openai.com/v1/codex/models"
+      ],
+      "dynamic_custom_slugs_allowed": true
+    },
+    "google_gemini": {
+      "auth_type": "GEMINI_API_KEY via BuildConfig / vault_auth_config.json",
+      "models": ["gemini-3.5-flash", "gemini-3.1-pro", "gemini-2.5-flash"]
+    },
+    "tool_calling_protocol": {
+      "format": "JSON block ```json { \"tool\": \"<tool_name>\", \"parameters\": { ... } } ```",
+      "supported_tools": [
+        "create_vault_note",
+        "read_vault_note",
+        "update_vault_note",
+        "delete_vault_note",
+        "list_vault_notes",
+        "search_vault_notes",
+        "get_device_telemetry",
+        "execute_dynamic_script",
+        "export_vault_backup"
+      ],
+      "execution_guarantee": "Parsed from streaming response and executed immediately in ViewModel coroutine scope against VaultRepository."
+    }
+  },
+  "system_instructions_for_ai": "You are Venice AI, embedded in the Android Obsidian Vault ecosystem. Adhere strictly to the following parameters:\n1. Persona: Raw, objective, direct. No moralizing, lecturing, or patronizing disclaimers.\n2. Storage Discipline: Respect the physical storage layout. Notes are stored in Markdown files under the active vault path. Never propose changing persistent architecture to in-memory mocks.\n3. Dynamic Execution: When executing commands or creating notes, emit strict JSON tool calls. Always use live, user-configured models.\n4. Context Awareness: Utilize Obsidian RAG (Vault indexing, wikilinks graph, tags) to deliver maximum signal-to-noise ratio answers."
+}

@@ -38,6 +38,11 @@ fun VaultStorageAuthDialog(
     hardwareState: com.example.data.adaptive.HardwareContextState? = null,
     chatGPTSession: ChatGPTSession? = null,
     activeProvider: String = "gemini",
+    selectedChatGPTModel: String = "gpt-4o",
+    chatGPTModels: List<com.example.data.auth.ChatGPTModelInfo> = emptyList(),
+    isLoadingChatGPTModels: Boolean = false,
+    onRefreshChatGPTModels: () -> Unit = {},
+    onSelectChatGPTModel: (String) -> Unit = {},
     onSelectProvider: (String) -> Unit = {},
     onInitiateChatGPTLogin: () -> Unit = {},
     onCompleteChatGPTLogin: (String) -> Unit = {},
@@ -49,6 +54,7 @@ fun VaultStorageAuthDialog(
     onExportBackupZip: () -> Unit,
     onClearChatHistory: () -> Unit,
     onExportChatMarkdown: () -> Unit,
+    onOpenDirectoryPicker: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedSection by remember { mutableStateOf(0) } // 0 = Storage & DB, 1 = Auth & Keys, 2 = Venice Persona, 3 = ChatGPT PKCE
@@ -246,6 +252,23 @@ fun VaultStorageAuthDialog(
                             }
 
                             // Storage Action Buttons
+                            OutlinedButton(
+                                onClick = onOpenDirectoryPicker,
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = ObsidianSurfaceElevated,
+                                    contentColor = ObsidianPurpleLight
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianPurple.copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("dialog_change_directory_button")
+                            ) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Select / Switch Vault Directory (SAF)", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
                                     onClick = onResyncStorage,
@@ -430,6 +453,60 @@ fun VaultStorageAuthDialog(
                                         }
                                         val expiryStr = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(Date(chatGPTSession.expiresAt))
                                         Text("Token Expiry: $expiryStr", fontSize = 11.sp, color = ObsidianTextMuted)
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("Selected ChatGPT Model:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ObsidianTextPrimary)
+                                            TextButton(
+                                                onClick = onRefreshChatGPTModels,
+                                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                            ) {
+                                                if (isLoadingChatGPTModels) {
+                                                    CircularProgressIndicator(modifier = Modifier.size(10.dp), color = ObsidianGreen, strokeWidth = 1.dp)
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text("Syncing...", fontSize = 10.sp, color = ObsidianGreen)
+                                                } else {
+                                                    Icon(Icons.Default.Refresh, contentDescription = null, tint = ObsidianGreen, modifier = Modifier.size(12.dp))
+                                                    Spacer(modifier = Modifier.width(3.dp))
+                                                    Text("Sync Live Models", fontSize = 10.sp, color = ObsidianGreen)
+                                                }
+                                            }
+                                        }
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            chatGPTModels.forEach { model ->
+                                                Surface(
+                                                    onClick = { onSelectChatGPTModel(model.id) },
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = if (selectedChatGPTModel == model.id) ObsidianPurpleContainer else ObsidianSurface,
+                                                    border = androidx.compose.foundation.BorderStroke(
+                                                        1.dp,
+                                                        if (selectedChatGPTModel == model.id) ObsidianPurpleLight else ObsidianBorder
+                                                    ),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                    ) {
+                                                        RadioButton(
+                                                            selected = selectedChatGPTModel == model.id,
+                                                            onClick = { onSelectChatGPTModel(model.id) }
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Column {
+                                                            Text(model.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = ObsidianTextPrimary)
+                                                            if (model.description.isNotBlank()) {
+                                                                Text(model.description, fontSize = 10.sp, color = ObsidianTextSecondary)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
 
                                         Button(
                                             onClick = onSignOutOfChatGPT,

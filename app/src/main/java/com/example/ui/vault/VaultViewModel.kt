@@ -49,6 +49,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     val chatGPTAuthManager = com.example.data.auth.ChatGPTAuthManager(application, viewModelScope)
     val chatGPTSession: StateFlow<com.example.data.auth.ChatGPTSession?> = chatGPTAuthManager.sessionState
     val chatGPTModels: StateFlow<List<com.example.data.auth.ChatGPTModelInfo>> = chatGPTAuthManager.models
+    val isLoadingChatGPTModels: StateFlow<Boolean> = chatGPTAuthManager.isLoadingModels
 
     private val _activeProvider = MutableStateFlow("gemini") // "gemini" or "chatgpt"
     val activeProvider: StateFlow<String> = _activeProvider.asStateFlow()
@@ -99,6 +100,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    private val _vaultPath = MutableStateFlow(repository.vaultAbsolutePath)
+    val vaultPath: StateFlow<String> = _vaultPath.asStateFlow()
 
     private val _syncMessage = MutableStateFlow<String?>(null)
     val syncMessage: StateFlow<String?> = _syncMessage.asStateFlow()
@@ -290,7 +294,9 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
     fun syncFilesystem() {
         viewModelScope.launch {
             _isSyncing.value = true
-            _syncMessage.value = "Indexing /storage/emulated/0/Download/ObsidianVault..."
+            val currentPath = repository.vaultAbsolutePath
+            _vaultPath.value = currentPath
+            _syncMessage.value = "Indexing $currentPath..."
             try {
                 val count = repository.syncVault()
                 refreshDynamicScripts()
@@ -301,6 +307,64 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 _isSyncing.value = false
             }
         }
+    }
+
+    fun switchVaultDirectory(newPath: String) {
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _syncMessage.value = "Mounting directory $newPath..."
+            try {
+                val count = repository.switchVaultDirectory(newPath)
+                _vaultPath.value = repository.vaultAbsolutePath
+                refreshDynamicScripts()
+                val loadedChat = repository.loadChatHistory()
+                _chatMessages.value = loadedChat
+                _syncMessage.value = "Switched to $newPath ($count notes indexed)"
+                showToast("Vault mounted: $newPath ($count notes)")
+                triggerHaptic(50)
+            } catch (e: Exception) {
+                _syncMessage.value = "Error switching directory: ${e.message}"
+                showToast("Failed switching folder: ${e.message}")
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    fun switchVaultDirectoryFromUri(uri: android.net.Uri) {
+        val path = repository.resolveSafUri(uri)
+        switchVaultDirectory(path)
+    }
+
+    fun resetVaultDirectory() {
+        viewModelScope.launch {
+            _isSyncing.value = true
+            try {
+                val count = repository.resetVaultDirectory()
+                _vaultPath.value = repository.vaultAbsolutePath
+                refreshDynamicScripts()
+                val loadedChat = repository.loadChatHistory()
+                _chatMessages.value = loadedChat
+                _syncMessage.value = "Reset to default vault ($count notes)"
+                showToast("Vault reset to default ($count notes)")
+            } catch (e: Exception) {
+                _syncMessage.value = "Error resetting directory: ${e.message}"
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    fun getCommonDirectories(): List<java.io.File> {
+        return repository.getCommonDirectories()
+    }
+
+    fun browseDirectories(parentPath: String): List<java.io.File> {
+        return repository.browseDirectories(parentPath)
+    }
+
+    fun countNotesInDirectory(dir: java.io.File): Int {
+        return repository.countNotesInDirectory(dir)
     }
 
     fun clearSyncMessage() {
@@ -506,15 +570,99 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 val cited = contextNotes.map { it.title }
                 val executedTools = mutableListOf<ToolExecutionResult>()
 
-                // Parse and execute system developer tool calls
-                val toolRegex = "```tool_call\\s*\\n?([\\s\\S]*?)\\n?```".toRegex()
+                // Extract all tool calls using multi-format regex and JSON matching
+                val extractedJsonObjects = mutableListOf<JSONObject>()
+                val toolRegex = "```(?:tool_call|tool|json)?\\s*\\n?([\\s\\S]*?)\\n?```".toRegex()
                 val toolMatches = toolRegex.findAll(reply).toList()
 
                 for (match in toolMatches) {
-                    val jsonRaw = match.groupValues[1].trim()
+                    val raw = match.groupValues[1].trim()
+                    if (raw.startsWith("{") && raw.endsWith("}")) {
+                        try {
+                            val j = JSONObject(raw)
+                            if (j.has("action") || j.has("skill") || j.has("name") || j.has("function")) {
+                                extractedJsonObjects.add(j)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                // If no code block was matched, check if raw reply contains a JSON object
+                if (extractedJsonObjects.isEmpty()) {
+                    val jsonFinder = "\\{[\\s\\S]*?\\}".toRegex()
+                    for (m in jsonFinder.findAll(reply)) {
+                        try {
+                            val j = JSONObject(m.value.trim())
+                            if (j.has("action") || (j.has("name") && (j.optString("name").startsWith("get_") || j.optString("name").contains("note") || j.optString("name").contains("script")))) {
+                                extractedJsonObjects.add(j)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                // Intent Fallback: If no tool was emitted by the model but user requested an explicit action
+                if (extractedJsonObjects.isEmpty()) {
+                    val lowerUser = userText.lowercase()
+                    if (lowerUser.contains("get_device_telemetry") || lowerUser.contains("telemetry")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "get_device_telemetry"))
+                    } else if (lowerUser.contains("get_hardware_sensors") || lowerUser.contains("sensors")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "get_hardware_sensors"))
+                    } else if (lowerUser.contains("get_runtime_jvm") || lowerUser.contains("jvm heap") || lowerUser.contains("thread count")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "get_runtime_jvm"))
+                    } else if (lowerUser.contains("get_display_metrics") || lowerUser.contains("display metrics") || lowerUser.contains("screen dpi")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "get_display_metrics"))
+                    } else if (lowerUser.contains("clipboard_read") || lowerUser.contains("read clipboard") || lowerUser.contains("read from clipboard")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "clipboard_read"))
+                    } else if (lowerUser.contains("run_diagnostic") || lowerUser.contains("storage audit") || lowerUser.contains("audit the obsidian") || lowerUser.contains("vault diagnostic")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "run_diagnostic"))
+                    } else if (lowerUser.contains("execute dynamic script")) {
+                        val scriptName = when {
+                            lowerUser.contains("auto_tagger") -> "auto_tagger"
+                            lowerUser.contains("generate_moc_index") || lowerUser.contains("moc") -> "generate_moc_index"
+                            lowerUser.contains("concept_auto_linker") -> "concept_auto_linker"
+                            lowerUser.contains("task_normalizer") -> "task_normalizer"
+                            lowerUser.contains("todo_aggregator") -> "todo_aggregator"
+                            lowerUser.contains("frontmatter_injector") -> "frontmatter_injector"
+                            lowerUser.contains("word_frequency_analyzer") -> "word_frequency_analyzer"
+                            lowerUser.contains("export_vault_json") -> "export_vault_json"
+                            lowerUser.contains("wikilink_normalizer") -> "wikilink_normalizer"
+                            lowerUser.contains("backup_vault") -> "backup_vault"
+                            lowerUser.contains("clean_empty_files") -> "clean_empty_files"
+                            lowerUser.contains("regex_replace") -> "regex_replace"
+                            else -> ""
+                        }
+                        if (scriptName.isNotBlank()) {
+                            extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "execute_dynamic_script").put("script", scriptName))
+                        }
+                    } else if (lowerUser.contains("trigger_toast")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "trigger_toast").put("message", "Obsidian Vault executed command."))
+                    } else if (lowerUser.contains("trigger_haptic") || lowerUser.contains("vibrate")) {
+                        extractedJsonObjects.add(JSONObject().put("action", "android_skill").put("skill", "trigger_haptic").put("duration_ms", 60))
+                    }
+                }
+
+                for (json in extractedJsonObjects) {
                     try {
-                        val json = JSONObject(jsonRaw)
-                        val action = json.optString("action")
+                        // Normalize tool naming from OpenAI / Function call format
+                        val rawName = json.optString("name", json.optString("function", ""))
+                        val action = if (json.has("action")) json.optString("action") else {
+                            if (rawName in listOf("create_note", "update_note", "delete_note", "create_folder", "refactor_links", "run_diagnostic")) {
+                                rawName
+                            } else {
+                                "android_skill"
+                            }
+                        }
+
+                        // Flatten nested parameters if any
+                        val params = json.optJSONObject("parameters") ?: json.optJSONObject("arguments")
+                        if (params != null) {
+                            val keys = params.keys()
+                            while (keys.hasNext()) {
+                                val k = keys.next()
+                                if (!json.has(k)) json.put(k, params.get(k))
+                            }
+                        }
+
                         when (action) {
                             "create_note" -> {
                                 val title = json.optString("title")
@@ -597,7 +745,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                 )
                             }
                             "android_skill" -> {
-                                val skill = json.optString("skill")
+                                val skill = json.optString("skill", rawName)
                                 when (skill) {
                                     "get_device_telemetry" -> {
                                         val telem = repository.getDeviceTelemetry()
@@ -666,7 +814,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                                         )
                                     }
                                     "trigger_haptic" -> {
-                                        val ms = json.optLong("duration_ms", 50L)
+                                        val ms = json.optLong("duration_ms", 60L)
                                         repository.triggerHaptic(ms)
                                         executedTools.add(
                                             ToolExecutionResult(
@@ -761,7 +909,11 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 // Strip raw tool blocks from reply text for a clean presentation
-                val cleanText = reply.replace(toolRegex, "").trim()
+                val cleanText = reply
+                    .replace("```tool_call[\\s\\S]*?```".toRegex(), "")
+                    .replace("```json\\s*\\{[\\s\\S]*?\"action\"[\\s\\S]*?\\}\\s*```".toRegex(), "")
+                    .replace("```tool[\\s\\S]*?```".toRegex(), "")
+                    .trim()
 
                 val modelMsg = ChatMessage(
                     role = "model",
@@ -1018,6 +1170,7 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val res = chatGPTAuthManager.completeLoginWithUrl(callbackUrl)
             res.onSuccess { session ->
+                _activeProvider.value = "chatgpt"
                 onResult(true, session.email)
             }.onFailure { err ->
                 onResult(false, err.message ?: "Sign-in failed")
@@ -1025,8 +1178,27 @@ class VaultViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun refreshChatGPTModels() {
+        viewModelScope.launch {
+            try {
+                chatGPTAuthManager.fetchModels()
+            } catch (e: Exception) {
+                showToast("Failed to refresh models: ${e.message}")
+            }
+        }
+    }
+
+    fun addCustomChatGPTModel(modelId: String, name: String = modelId) {
+        if (modelId.isBlank()) return
+        val m = chatGPTAuthManager.addCustomModel(modelId, name)
+        _selectedChatGPTModel.value = m.id
+        _activeProvider.value = "chatgpt"
+        showToast("Model added: ${m.name}")
+    }
+
     fun signOutOfChatGPT() {
         chatGPTAuthManager.clearSession()
+        _activeProvider.value = "gemini"
     }
 
     fun saveGraphNodePositions(positions: Map<String, Pair<Float, Float>>) {

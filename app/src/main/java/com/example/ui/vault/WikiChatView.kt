@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,6 +28,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.example.data.auth.ChatGPTModelInfo
+import com.example.data.auth.ChatGPTSession
 import com.example.data.model.ChatMessage
 import com.example.data.model.GeminiModel
 import com.example.ui.theme.*
@@ -37,6 +43,17 @@ fun WikiChatView(
     isLoading: Boolean,
     selectedModel: GeminiModel,
     onModelSelected: (GeminiModel) -> Unit,
+    activeProvider: String = "gemini",
+    onSelectProvider: (String) -> Unit = {},
+    selectedChatGPTModel: String = "gpt-4o",
+    chatGPTModels: List<ChatGPTModelInfo> = emptyList(),
+    isLoadingChatGPTModels: Boolean = false,
+    chatGPTSession: ChatGPTSession? = null,
+    onSelectChatGPTModel: (String) -> Unit = {},
+    onRefreshChatGPTModels: () -> Unit = {},
+    onAddCustomChatGPTModel: (String, String) -> Unit = { _, _ -> },
+    onInitiateChatGPTLogin: () -> Unit = {},
+    onSignOutOfChatGPT: () -> Unit = {},
     onSendMessage: (String, Boolean) -> Unit,
     onSynthesizeTopic: (String) -> Unit,
     onWikilinkClicked: (String) -> Unit,
@@ -48,7 +65,10 @@ fun WikiChatView(
     var inputText by remember { mutableStateOf("") }
     var askVaultEnabled by remember { mutableStateOf(true) }
     var showSynthesizeDialog by remember { mutableStateOf(false) }
-    var showModelMenu by remember { mutableStateOf(false) }
+    var showModelDialog by remember { mutableStateOf(false) }
+    var modelDialogTab by remember { mutableIntStateOf(if (activeProvider == "chatgpt") 1 else 0) }
+    var customModelInput by remember { mutableStateOf("") }
+    var showAddCustomModel by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     // Scroll to bottom when new messages arrive
@@ -106,15 +126,18 @@ fun WikiChatView(
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    color = ObsidianGreen.copy(alpha = 0.2f),
+                                    color = if (activeProvider == "chatgpt") ObsidianGreen.copy(alpha = 0.2f) else ObsidianPurple.copy(alpha = 0.2f),
                                     shape = RoundedCornerShape(4.dp),
-                                    border = androidx.compose.foundation.BorderStroke(0.5.dp, ObsidianGreen)
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        0.5.dp,
+                                        if (activeProvider == "chatgpt") ObsidianGreen else ObsidianPurple
+                                    )
                                 ) {
                                     Text(
-                                        text = "Root Tools Active",
+                                        text = if (activeProvider == "chatgpt") "ChatGPT Codex" else "Gemini RAG",
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = ObsidianGreen,
+                                        color = if (activeProvider == "chatgpt") ObsidianGreen else ObsidianPurpleLight,
                                         modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                     )
                                 }
@@ -127,53 +150,61 @@ fun WikiChatView(
                         }
                     }
 
-                    // Model Selection Chip / Dropdown
-                    Box {
-                        Surface(
-                            onClick = { showModelMenu = true },
-                            color = ObsidianSurfaceElevated,
-                            shape = RoundedCornerShape(8.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder),
-                            modifier = Modifier.testTag("model_picker_button")
+                    // Model Selection Chip / Button
+                    Surface(
+                        onClick = {
+                            modelDialogTab = if (activeProvider == "chatgpt") 1 else 0
+                            showModelDialog = true
+                        },
+                        color = ObsidianSurfaceElevated,
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (activeProvider == "chatgpt") ObsidianGreen else ObsidianPurpleLight
+                        ),
+                        modifier = Modifier.testTag("model_picker_button")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
+                            if (activeProvider == "chatgpt") {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(if (chatGPTSession?.isValid == true) ObsidianGreen else ObsidianYellow)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                val currentChatGPTName = chatGPTModels.find { it.id == selectedChatGPTModel }?.name
+                                    ?: selectedChatGPTModel
+                                Text(
+                                    text = currentChatGPTName,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ObsidianGreen
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = ObsidianTeal,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
                                 Text(
                                     text = selectedModel.displayName.replace("Gemini ", ""),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = ObsidianTeal
                                 )
-                                Icon(
-                                    Icons.Default.ArrowDropDown,
-                                    contentDescription = null,
-                                    tint = ObsidianTextSecondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
                             }
-                        }
-
-                        DropdownMenu(
-                            expanded = showModelMenu,
-                            onDismissRequest = { showModelMenu = false },
-                            modifier = Modifier.background(ObsidianSurfaceElevated)
-                        ) {
-                            GeminiModel.values().forEach { model ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(model.displayName, fontWeight = FontWeight.Bold, color = ObsidianTextPrimary)
-                                            Text(model.description, fontSize = 10.sp, color = ObsidianTextMuted)
-                                        }
-                                    },
-                                    onClick = {
-                                        onModelSelected(model)
-                                        showModelMenu = false
-                                    }
-                                )
-                            }
+                            Icon(
+                                Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                tint = ObsidianTextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
                     }
                 }
@@ -218,48 +249,475 @@ fun WikiChatView(
                         onClick = { showSynthesizeDialog = true },
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = ObsidianSurfaceElevated,
-                            contentColor = ObsidianTextPrimary
-                        ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.height(28.dp).testTag("synthesize_wiki_button")
-                    ) {
-                        Icon(Icons.Default.MenuBook, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Synthesize Node", fontSize = 11.sp)
-                    }
-
-                    OutlinedButton(
-                        onClick = onRunDiagnostic,
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = ObsidianSurfaceElevated,
                             contentColor = ObsidianTeal
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianTeal.copy(alpha = 0.5f)),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.height(28.dp).testTag("run_diagnostic_button")
+                        modifier = Modifier.height(28.dp)
                     ) {
-                        Icon(Icons.Default.Build, contentDescription = null, tint = ObsidianTeal, modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.AutoStories, contentDescription = null, modifier = Modifier.size(13.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Storage Audit", fontSize = 11.sp)
+                        Text("Synthesize Topic", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                     }
 
                     OutlinedButton(
                         onClick = onOpenSkills,
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = ObsidianSurfaceElevated,
-                            contentColor = ObsidianGreen
+                            contentColor = ObsidianPurpleLight
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianPurple.copy(alpha = 0.5f)),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.height(28.dp).testTag("open_android_skills_button")
+                        modifier = Modifier.height(28.dp).testTag("open_android_skills_btn")
                     ) {
-                        Icon(Icons.Default.Android, contentDescription = null, tint = ObsidianGreen, modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(13.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Android Skills", fontSize = 11.sp)
+                        Text("Android Root Skills", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+
+        // Model & Provider Selection Modal Dialog
+        if (showModelDialog) {
+            Dialog(
+                onDismissRequest = { showModelDialog = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth(0.92f)
+                        .wrapContentHeight(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = ObsidianSurface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder),
+                    tonalElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        // Dialog Header
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Psychology,
+                                    contentDescription = null,
+                                    tint = ObsidianPurpleLight,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Select AI Model & Provider",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = ObsidianTextPrimary
+                                    )
+                                )
+                            }
+                            IconButton(onClick = { showModelDialog = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = ObsidianTextSecondary)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Provider Tabs
+                        PrimaryTabRow(
+                            selectedTabIndex = modelDialogTab,
+                            containerColor = ObsidianSurfaceElevated,
+                            contentColor = ObsidianPurpleLight,
+                            indicator = {
+                                TabRowDefaults.PrimaryIndicator(
+                                    modifier = Modifier.tabIndicatorOffset(modelDialogTab),
+                                    color = if (modelDialogTab == 0) ObsidianPurpleLight else ObsidianGreen
+                                )
+                            }
+                        ) {
+                            Tab(
+                                selected = modelDialogTab == 0,
+                                onClick = { modelDialogTab = 0 },
+                                text = { Text("Google Gemini", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                                icon = { Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp), tint = ObsidianTeal) }
+                            )
+                            Tab(
+                                selected = modelDialogTab == 1,
+                                onClick = { modelDialogTab = 1 },
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("OpenAI ChatGPT", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                        if (chatGPTSession?.isValid == true) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(6.dp)
+                                                    .clip(CircleShape)
+                                                    .background(ObsidianGreen)
+                                            )
+                                        }
+                                    }
+                                },
+                                icon = { Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(16.dp), tint = ObsidianGreen) }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Tab Content
+                        if (modelDialogTab == 0) {
+                            // Gemini Models List
+                            Text(
+                                text = "Native Gemini Models (Server & Key Backed)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ObsidianTextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                GeminiModel.values().forEach { model ->
+                                    val isSelected = activeProvider == "gemini" && selectedModel == model
+                                    Surface(
+                                        onClick = {
+                                            onSelectProvider("gemini")
+                                            onModelSelected(model)
+                                            showModelDialog = false
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (isSelected) ObsidianPurpleContainer else ObsidianSurfaceElevated,
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            if (isSelected) ObsidianPurpleLight else ObsidianBorder
+                                        ),
+                                        modifier = Modifier.fillMaxWidth().testTag("select_model_${model.name}")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            RadioButton(
+                                                selected = isSelected,
+                                                onClick = {
+                                                    onSelectProvider("gemini")
+                                                    onModelSelected(model)
+                                                    showModelDialog = false
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = model.displayName,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    color = ObsidianTextPrimary
+                                                )
+                                                Text(
+                                                    text = model.description,
+                                                    fontSize = 11.sp,
+                                                    color = ObsidianTextSecondary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // ChatGPT Models List & OAuth Status
+                            if (chatGPTSession != null && chatGPTSession.isValid) {
+                                // Authenticated Status Bar
+                                Surface(
+                                    color = ObsidianGreen.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianGreen.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = ObsidianGreen, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "OAuth: ${chatGPTSession.email.ifBlank { "Signed In" }}",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = ObsidianGreen
+                                            )
+                                        }
+                                        TextButton(
+                                            onClick = onSignOutOfChatGPT,
+                                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("Sign Out", fontSize = 11.sp, color = ObsidianRed)
+                                        }
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "OpenAI Dynamic Models (${chatGPTModels.size})",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = ObsidianTextSecondary
+                                    )
+                                    OutlinedButton(
+                                        onClick = onRefreshChatGPTModels,
+                                        shape = RoundedCornerShape(6.dp),
+                                        border = androidx.compose.foundation.BorderStroke(0.5.dp, ObsidianGreen),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        if (isLoadingChatGPTModels) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(12.dp),
+                                                color = ObsidianGreen,
+                                                strokeWidth = 1.5.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Fetching...", fontSize = 10.sp, color = ObsidianGreen)
+                                        } else {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, tint = ObsidianGreen, modifier = Modifier.size(12.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Sync OpenAI", fontSize = 10.sp, color = ObsidianGreen)
+                                        }
+                                    }
+                                }
+
+                                if (isLoadingChatGPTModels && chatGPTModels.isEmpty()) {
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            CircularProgressIndicator(color = ObsidianGreen, modifier = Modifier.size(24.dp))
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text("Fetching live models from OpenAI endpoints...", fontSize = 11.sp, color = ObsidianTextSecondary)
+                                        }
+                                    }
+                                } else if (chatGPTModels.isEmpty()) {
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(12.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text("No models fetched yet", fontSize = 12.sp, color = ObsidianTextSecondary)
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Button(
+                                                onClick = onRefreshChatGPTModels,
+                                                colors = ButtonDefaults.buttonColors(containerColor = ObsidianGreen),
+                                                shape = RoundedCornerShape(6.dp)
+                                            ) {
+                                                Text("Fetch Live Models from OpenAI", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 240.dp)
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        chatGPTModels.forEach { model ->
+                                            val isSelected = activeProvider == "chatgpt" && selectedChatGPTModel == model.id
+                                            Surface(
+                                                onClick = {
+                                                    onSelectProvider("chatgpt")
+                                                    onSelectChatGPTModel(model.id)
+                                                    showModelDialog = false
+                                                },
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = if (isSelected) ObsidianGreen.copy(alpha = 0.15f) else ObsidianSurfaceElevated,
+                                                border = androidx.compose.foundation.BorderStroke(
+                                                    1.dp,
+                                                    if (isSelected) ObsidianGreen else ObsidianBorder
+                                                ),
+                                                modifier = Modifier.fillMaxWidth().testTag("select_chatgpt_${model.id}")
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(10.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    RadioButton(
+                                                        selected = isSelected,
+                                                        onClick = {
+                                                            onSelectProvider("chatgpt")
+                                                            onSelectChatGPTModel(model.id)
+                                                            showModelDialog = false
+                                                        }
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                                            Text(
+                                                                text = model.name,
+                                                                fontWeight = FontWeight.Bold,
+                                                                fontSize = 12.sp,
+                                                                color = ObsidianTextPrimary
+                                                            )
+                                                            if (model.id.startsWith("o") || model.id.contains("4o")) {
+                                                                Spacer(modifier = Modifier.width(6.dp))
+                                                                Surface(
+                                                                    color = ObsidianGreen.copy(alpha = 0.2f),
+                                                                    shape = RoundedCornerShape(4.dp)
+                                                                ) {
+                                                                    Text(
+                                                                        text = model.id,
+                                                                        fontSize = 9.sp,
+                                                                        fontFamily = FontFamily.Monospace,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        color = ObsidianGreen,
+                                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                        if (model.description.isNotBlank()) {
+                                                            Text(
+                                                                text = model.description,
+                                                                fontSize = 10.sp,
+                                                                color = ObsidianTextSecondary
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                // Custom Model Input Accordion
+                                Surface(
+                                    onClick = { showAddCustomModel = !showAddCustomModel },
+                                    color = ObsidianSurface,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(0.5.dp, ObsidianBorder),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "+ Enter Any Custom Model Slug",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = ObsidianTeal
+                                        )
+                                        Icon(
+                                            if (showAddCustomModel) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                            contentDescription = null,
+                                            tint = ObsidianTextSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+
+                                if (showAddCustomModel) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(ObsidianSurface, RoundedCornerShape(8.dp))
+                                            .padding(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        OutlinedTextField(
+                                            value = customModelInput,
+                                            onValueChange = { customModelInput = it },
+                                            placeholder = { Text("e.g. gpt-4.5-preview, chatgpt-4o-latest, o3-mini", fontSize = 11.sp) },
+                                            singleLine = true,
+                                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = ObsidianTextPrimary),
+                                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                                        )
+                                        Button(
+                                            onClick = {
+                                                if (customModelInput.isNotBlank()) {
+                                                    onAddCustomChatGPTModel(customModelInput.trim(), customModelInput.trim())
+                                                    showModelDialog = false
+                                                    customModelInput = ""
+                                                }
+                                            },
+                                            enabled = customModelInput.isNotBlank(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianGreen),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier.fillMaxWidth().height(32.dp)
+                                        ) {
+                                            Text("Add & Select Model", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Not signed in with ChatGPT OAuth
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = ObsidianSurfaceElevated),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.LockPerson,
+                                            contentDescription = null,
+                                            tint = ObsidianGreen,
+                                            modifier = Modifier.size(36.dp)
+                                        )
+                                        Text(
+                                            text = "Connect ChatGPT via OAuth 2.0 PKCE",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp,
+                                            color = ObsidianTextPrimary
+                                        )
+                                        Text(
+                                            text = "Sign in to use your ChatGPT subscription directly (GPT-4o, o1, o3-mini) with native streaming, RAG vault search, and automated tool execution.",
+                                            fontSize = 12.sp,
+                                            color = ObsidianTextSecondary,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                        Button(
+                                            onClick = {
+                                                showModelDialog = false
+                                                onInitiateChatGPTLogin()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = ObsidianGreen),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.fillMaxWidth().testTag("chatgpt_signin_button")
+                                        ) {
+                                            Icon(Icons.Default.Login, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                "Sign in with ChatGPT (PKCE)",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.Black
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

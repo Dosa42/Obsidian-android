@@ -86,18 +86,15 @@ class ChatGPTAuthManager(
     }
 
     private val sessionFile: File get() = File(authDir, "chatgpt_session.json")
+    private val modelsCacheFile: File get() = File(authDir, "chatgpt_models.json")
 
     private val _sessionState = MutableStateFlow<ChatGPTSession?>(null)
     val sessionState: StateFlow<ChatGPTSession?> = _sessionState.asStateFlow()
 
-    private val _models = MutableStateFlow<List<ChatGPTModelInfo>>(
-        listOf(
-            ChatGPTModelInfo("gpt-4o", "GPT-4o (Omni)"),
-            ChatGPTModelInfo("gpt-4o-mini", "GPT-4o Mini"),
-            ChatGPTModelInfo("o1", "o1 (Reasoning)"),
-            ChatGPTModelInfo("o3-mini", "o3-mini")
-        )
-    )
+    private val _isLoadingModels = MutableStateFlow(false)
+    val isLoadingModels: StateFlow<Boolean> = _isLoadingModels.asStateFlow()
+
+    private val _models = MutableStateFlow<List<ChatGPTModelInfo>>(loadModelsFromDisk())
     val models: StateFlow<List<ChatGPTModelInfo>> = _models.asStateFlow()
 
     private var pendingOAuth: PendingOAuth? = null
@@ -106,7 +103,79 @@ class ChatGPTAuthManager(
     private val activeStreams = ConcurrentHashMap<String, Call>()
 
     init {
-        loadSessionFromDisk()
+        val s = loadSessionFromDisk()
+        if (s != null && s.isValid) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    fetchModels()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Initial dynamic models fetch deferred", e)
+                }
+            }
+        }
+    }
+
+    fun loadModelsFromDisk(): List<ChatGPTModelInfo> {
+        return try {
+            if (modelsCacheFile.exists()) {
+                val arr = JSONArray(modelsCacheFile.readText())
+                val list = mutableListOf<ChatGPTModelInfo>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val id = obj.optString("id")
+                    val name = obj.optString("name", id)
+                    val desc = obj.optString("description", "")
+                    val rArr = obj.optJSONArray("reasoningLevels")
+                    val reasonLevels = mutableListOf<String>()
+                    if (rArr != null) {
+                        for (j in 0 until rArr.length()) {
+                            reasonLevels.add(rArr.getString(j))
+                        }
+                    }
+                    if (id.isNotBlank()) {
+                        list.add(ChatGPTModelInfo(id, name, desc, reasonLevels))
+                    }
+                }
+                list
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed reading cached models", e)
+            emptyList()
+        }
+    }
+
+    fun saveModelsToDisk(models: List<ChatGPTModelInfo>) {
+        try {
+            val arr = JSONArray()
+            for (m in models) {
+                val obj = JSONObject().apply {
+                    put("id", m.id)
+                    put("name", m.name)
+                    put("description", m.description)
+                    val rArr = JSONArray()
+                    m.reasoningLevels.forEach { rArr.put(it) }
+                    put("reasoningLevels", rArr)
+                }
+                arr.put(obj)
+            }
+            modelsCacheFile.writeText(arr.toString(2))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed caching dynamic models to disk", e)
+        }
+    }
+
+    fun addCustomModel(modelId: String, modelName: String = modelId): ChatGPTModelInfo {
+        val cleanId = modelId.trim()
+        val cleanName = if (modelName.isNotBlank()) modelName.trim() else cleanId
+        val newModel = ChatGPTModelInfo(id = cleanId, name = cleanName, description = "Custom User-Specified Model")
+        val current = _models.value.toMutableList()
+        current.removeAll { it.id.equals(cleanId, ignoreCase = true) }
+        current.add(0, newModel)
+        _models.value = current
+        saveModelsToDisk(current)
+        return newModel
     }
 
     fun loadSessionFromDisk(): ChatGPTSession? {
@@ -519,55 +588,103 @@ class ChatGPTAuthManager(
     }
 
     suspend fun fetchModels(): List<ChatGPTModelInfo> = withContext(Dispatchers.IO) {
-        val headers = getApiHeaders()
-        val url = "$API_BASE/models?client_version=$CODEX_VERSION"
-
-        val reqBuilder = Request.Builder().url(url)
-        headers.forEach { (k, v) -> reqBuilder.header(k, v) }
-
-        var resp = okHttpClient.newCall(reqBuilder.build()).execute()
-        var body = resp.body?.string() ?: ""
-
-        if (resp.code == 401) {
-            // Attempt refresh once
-            refreshToken()
-            val newHeaders = getApiHeaders()
-            val retryReq = Request.Builder().url(url)
-            newHeaders.forEach { (k, v) -> retryReq.header(k, v) }
-            resp = okHttpClient.newCall(retryReq.build()).execute()
-            body = resp.body?.string() ?: ""
-        }
-
-        if (!resp.isSuccessful) {
-            throw IOException("Fetch models failed: $body")
-        }
-
-        val json = JSONObject(body)
-        val arr = json.optJSONArray("models") ?: json.optJSONArray("data") ?: JSONArray()
+        _isLoadingModels.value = true
         val list = mutableListOf<ChatGPTModelInfo>()
-        for (i in 0 until arr.length()) {
-            val m = arr.getJSONObject(i)
-            val id = m.optString("slug", m.optString("id"))
-            val name = m.optString("display_name", m.optString("name", id))
-            val desc = m.optString("description", "")
-            val reasonArr = m.optJSONArray("supported_reasoning_levels")
-            val reasonLevels = mutableListOf<String>()
-            if (reasonArr != null) {
-                for (j in 0 until reasonArr.length()) {
-                    reasonLevels.add(reasonArr.getString(j))
+        try {
+            var session = _sessionState.value ?: loadSessionFromDisk() ?: throw IllegalStateException("Not authenticated with ChatGPT OAuth")
+            if (session.expiresAt > 0 && System.currentTimeMillis() >= session.expiresAt - 90_000) {
+                val refreshRes = refreshToken()
+                session = refreshRes.getOrNull() ?: session
+            }
+
+            // Candidate OpenAI/ChatGPT model endpoints in priority order
+            val endpoints = listOf(
+                "$API_BASE/models?client_version=$CODEX_VERSION",
+                "https://chatgpt.com/backend-api/models",
+                "https://chatgpt.com/backend-api/models?history_and_training_disabled=false",
+                "https://api.openai.com/v1/models"
+            )
+
+            for (url in endpoints) {
+                try {
+                    val reqBuilder = Request.Builder().url(url)
+                    val headers = getApiHeaders()
+                    headers.forEach { (k, v) -> reqBuilder.header(k, v) }
+
+                    var resp = okHttpClient.newCall(reqBuilder.build()).execute()
+                    var body = resp.body?.string() ?: ""
+
+                    if (resp.code == 401) {
+                        refreshToken()
+                        val newHeaders = getApiHeaders()
+                        val retryReq = Request.Builder().url(url)
+                        newHeaders.forEach { (k, v) -> retryReq.header(k, v) }
+                        resp = okHttpClient.newCall(retryReq.build()).execute()
+                        body = resp.body?.string() ?: ""
+                    }
+
+                    if (resp.isSuccessful && body.isNotBlank()) {
+                        val json = JSONObject(body)
+                        val arr = json.optJSONArray("models")
+                            ?: json.optJSONArray("data")
+                            ?: json.optJSONArray("categories")
+                        if (arr != null && arr.length() > 0) {
+                            for (i in 0 until arr.length()) {
+                                val item = arr.get(i)
+                                if (item is JSONObject) {
+                                    val id = item.optString("slug", item.optString("id", ""))
+                                    if (id.isNotBlank()) {
+                                        val name = item.optString("display_name", item.optString("title", item.optString("name", id)))
+                                        val desc = item.optString("description", item.optString("snippet", ""))
+                                        val reasonArr = item.optJSONArray("supported_reasoning_levels")
+                                        val reasonLevels = mutableListOf<String>()
+                                        if (reasonArr != null) {
+                                            for (j in 0 until reasonArr.length()) {
+                                                reasonLevels.add(reasonArr.getString(j))
+                                            }
+                                        }
+                                        if (list.none { it.id.equals(id, ignoreCase = true) }) {
+                                            list.add(ChatGPTModelInfo(id, name, desc, reasonLevels))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Dynamic fetch from $url encountered issue: ${e.message}")
+                }
+
+                if (list.isNotEmpty()) {
+                    break
                 }
             }
-            list.add(ChatGPTModelInfo(id, name, desc, reasonLevels))
-        }
 
-        if (list.isNotEmpty()) {
-            _models.value = list
+            if (list.isNotEmpty()) {
+                _models.value = list
+                saveModelsToDisk(list)
+            } else {
+                val disk = loadModelsFromDisk()
+                if (disk.isNotEmpty()) {
+                    _models.value = disk
+                    list.addAll(disk)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed fetching dynamic OpenAI models", e)
+            val disk = loadModelsFromDisk()
+            if (disk.isNotEmpty()) {
+                _models.value = disk
+                list.addAll(disk)
+            }
+        } finally {
+            _isLoadingModels.value = false
         }
         list
     }
 
     /**
-     * Executes real-time SSE streaming against ChatGPT Codex Responses API.
+     * Executes real-time SSE streaming against ChatGPT Codex Responses API with native function/tool calling.
      */
     suspend fun streamResponses(
         model: String,
@@ -620,13 +737,15 @@ class ChatGPTAuthManager(
             })
         }
 
+        val toolsArray = getNativeToolsArray()
+
         val payload = JSONObject().apply {
             put("model", model)
             put("instructions", systemInstructions)
             put("input", inputList)
             put("stream", true)
             put("store", false)
-            put("tools", JSONArray())
+            put("tools", toolsArray)
             put("parallel_tool_calls", false)
             if (!reasoningEffort.isNullOrBlank()) {
                 put("reasoning", JSONObject().put("effort", reasoningEffort))
@@ -648,6 +767,8 @@ class ChatGPTAuthManager(
         activeStreams[streamId] = call
 
         val accumulatedText = StringBuilder()
+        val inFlightFunctionCalls = mutableMapOf<String, Pair<String, StringBuilder>>() // call_id -> (name, argsBuffer)
+        val completedToolBlocks = mutableSetOf<String>()
 
         try {
             val response = call.execute()
@@ -676,22 +797,61 @@ class ChatGPTAuthManager(
                                 onChunk(delta)
                                 onStatus("Receiving reply...")
                             }
+                        } else if (type == "response.output_item.added") {
+                            val item = event.optJSONObject("item")
+                            if (item != null && item.optString("type") == "function_call") {
+                                val callId = item.optString("call_id", item.optString("id", "call_${System.currentTimeMillis()}"))
+                                val name = item.optString("name")
+                                inFlightFunctionCalls[callId] = Pair(name, StringBuilder())
+                                onStatus("Executing $name...")
+                            }
+                        } else if (type == "response.function_call_arguments.delta") {
+                            val callId = event.optString("call_id", inFlightFunctionCalls.keys.lastOrNull() ?: "")
+                            val delta = event.optString("delta", "")
+                            inFlightFunctionCalls[callId]?.second?.append(delta)
+                        } else if (type == "response.function_call_arguments.done" || type == "response.output_item.done") {
+                            val item = event.optJSONObject("item")
+                            val callId = event.optString("call_id", item?.optString("call_id", item?.optString("id", "")) ?: "")
+                            val name = item?.optString("name") ?: inFlightFunctionCalls[callId]?.first ?: ""
+                            val args = item?.optString("arguments") ?: inFlightFunctionCalls[callId]?.second?.toString() ?: "{}"
+                            if (name.isNotBlank()) {
+                                val block = formatFunctionCallToToolBlock(name, args)
+                                if (!completedToolBlocks.contains(block)) {
+                                    completedToolBlocks.add(block)
+                                    accumulatedText.append("\n\n").append(block).append("\n")
+                                    onChunk("\n\n$block\n")
+                                }
+                            }
                         } else if (type == "response.created" || type == "response.in_progress" || type.startsWith("response.reasoning")) {
                             onStatus("Thinking...")
                         } else if (type == "response.completed") {
                             val respObj = event.optJSONObject("response")
                             val outputArr = respObj?.optJSONArray("output")
-                            if (outputArr != null && accumulatedText.isEmpty()) {
+                            if (outputArr != null) {
                                 for (i in 0 until outputArr.length()) {
                                     val item = outputArr.getJSONObject(i)
-                                    val content = item.optJSONArray("content")
-                                    if (content != null) {
-                                        for (j in 0 until content.length()) {
-                                            val c = content.getJSONObject(j)
-                                            if (c.optString("type") == "output_text") {
-                                                val text = c.optString("text")
-                                                accumulatedText.append(text)
-                                                onChunk(text)
+                                    val itemType = item.optString("type")
+                                    if (itemType == "function_call") {
+                                        val name = item.optString("name")
+                                        val args = item.optString("arguments")
+                                        if (name.isNotBlank()) {
+                                            val block = formatFunctionCallToToolBlock(name, args)
+                                            if (!completedToolBlocks.contains(block)) {
+                                                completedToolBlocks.add(block)
+                                                accumulatedText.append("\n\n").append(block).append("\n")
+                                                onChunk("\n\n$block\n")
+                                            }
+                                        }
+                                    } else {
+                                        val content = item.optJSONArray("content")
+                                        if (content != null && accumulatedText.isEmpty()) {
+                                            for (j in 0 until content.length()) {
+                                                val c = content.getJSONObject(j)
+                                                if (c.optString("type") == "output_text") {
+                                                    val text = c.optString("text")
+                                                    accumulatedText.append(text)
+                                                    onChunk(text)
+                                                }
                                             }
                                         }
                                     }
@@ -709,6 +869,204 @@ class ChatGPTAuthManager(
         }
 
         return@withContext accumulatedText.toString()
+    }
+
+    fun formatFunctionCallToToolBlock(name: String, argsJsonStr: String): String {
+        val argsObj = try {
+            if (argsJsonStr.isNotBlank()) JSONObject(argsJsonStr) else JSONObject()
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        val toolCallObj = JSONObject()
+        when (name) {
+            "create_note", "update_note", "delete_note", "create_folder", "refactor_links", "run_diagnostic" -> {
+                toolCallObj.put("action", name)
+                val keys = argsObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    toolCallObj.put(k, argsObj.get(k))
+                }
+            }
+            else -> {
+                // Native Android skills & dynamic scripts
+                toolCallObj.put("action", "android_skill")
+                toolCallObj.put("skill", name)
+                val keys = argsObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    if (k != "skill" && k != "action") {
+                        toolCallObj.put(k, argsObj.get(k))
+                    }
+                }
+            }
+        }
+        return "```tool_call\n${toolCallObj.toString(2)}\n```"
+    }
+
+    fun getNativeToolsArray(): JSONArray {
+        val tools = JSONArray()
+
+        fun addTool(name: String, description: String, props: Map<String, Pair<String, String>>, required: List<String>) {
+            val parameters = JSONObject().apply {
+                put("type", "object")
+                val propsObj = JSONObject()
+                props.forEach { (k, v) ->
+                    propsObj.put(k, JSONObject().apply {
+                        put("type", v.first)
+                        put("description", v.second)
+                    })
+                }
+                put("properties", propsObj)
+                val reqArr = JSONArray()
+                required.forEach { reqArr.put(it) }
+                put("required", reqArr)
+            }
+            tools.put(JSONObject().apply {
+                put("type", "function")
+                put("name", name)
+                put("description", description)
+                put("parameters", parameters)
+            })
+        }
+
+        addTool(
+            name = "create_note",
+            description = "Create a new note or overwrite existing note on disk at /storage/emulated/0/Download/ObsidianVault",
+            props = mapOf(
+                "title" to Pair("string", "Title of the note"),
+                "folder" to Pair("string", "Folder name in vault (e.g. 'Root', 'Concepts', 'Daily')"),
+                "content" to Pair("string", "Markdown content with [[wikilinks]] and #tags")
+            ),
+            required = listOf("title", "content")
+        )
+
+        addTool(
+            name = "update_note",
+            description = "Update existing markdown note content in the vault on disk",
+            props = mapOf(
+                "title" to Pair("string", "Title of the existing note"),
+                "content" to Pair("string", "Updated markdown content")
+            ),
+            required = listOf("title", "content")
+        )
+
+        addTool(
+            name = "delete_note",
+            description = "Delete a note file from the vault on disk",
+            props = mapOf("title" to Pair("string", "Title of the note to delete")),
+            required = listOf("title")
+        )
+
+        addTool(
+            name = "create_folder",
+            description = "Create a directory inside the vault on disk",
+            props = mapOf("folder" to Pair("string", "Directory name")),
+            required = listOf("folder")
+        )
+
+        addTool(
+            name = "refactor_links",
+            description = "Batch refactor/rename a wikilink across all markdown files in the vault",
+            props = mapOf(
+                "old_title" to Pair("string", "Old note title to replace"),
+                "new_title" to Pair("string", "New note title")
+            ),
+            required = listOf("old_title", "new_title")
+        )
+
+        addTool(
+            name = "run_diagnostic",
+            description = "Run a comprehensive health, database & broken-links storage audit on the vault",
+            props = emptyMap(),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "get_device_telemetry",
+            description = "Inspect live Android phone telemetry: OS version, SDK, RAM usage %, available RAM, battery %, charging status, network type",
+            props = emptyMap(),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "get_hardware_sensors",
+            description = "Inspect physical Android hardware sensors (accelerometer, gyroscope, light sensor, proximity sensor)",
+            props = emptyMap(),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "get_runtime_jvm",
+            description = "Inspect Android JVM runtime heap memory (MB), active threads count, and CPU cores",
+            props = emptyMap(),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "get_display_metrics",
+            description = "Inspect Android screen resolution width x height in px, density DPI, scale factor, and orientation",
+            props = emptyMap(),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "get_storage_audit",
+            description = "Inspect Android storage partition free space (GB) and total vault file size stats",
+            props = emptyMap(),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "clipboard_write",
+            description = "Copy given text to Android system clipboard",
+            props = mapOf("text" to Pair("string", "Text content to copy")),
+            required = listOf("text")
+        )
+
+        addTool(
+            name = "clipboard_read",
+            description = "Read current text from Android system clipboard",
+            props = emptyMap(),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "trigger_toast",
+            description = "Display a native Android toast notification popup on screen",
+            props = mapOf("message" to Pair("string", "Message to display")),
+            required = listOf("message")
+        )
+
+        addTool(
+            name = "trigger_haptic",
+            description = "Trigger tactile vibration haptic feedback on the phone",
+            props = mapOf("duration_ms" to Pair("integer", "Duration in milliseconds (50-200)")),
+            required = emptyList()
+        )
+
+        addTool(
+            name = "share_content",
+            description = "Open native Android Share Sheet with note content",
+            props = mapOf(
+                "text" to Pair("string", "Content to share"),
+                "title" to Pair("string", "Share title")
+            ),
+            required = listOf("text")
+        )
+
+        addTool(
+            name = "execute_dynamic_script",
+            description = "Execute dynamic script rule (auto_tagger, concept_auto_linker, task_normalizer, todo_aggregator, frontmatter_injector, regex_replace)",
+            props = mapOf(
+                "script" to Pair("string", "Script name"),
+                "target_tag" to Pair("string", "Target tag (optional)"),
+                "search_pattern" to Pair("string", "Regex pattern (optional)"),
+                "replace_pattern" to Pair("string", "Replacement string (optional)")
+            ),
+            required = listOf("script")
+        )
+
+        return tools
     }
 
     fun cancelStream(streamId: String) {

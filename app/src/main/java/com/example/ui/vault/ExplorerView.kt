@@ -48,6 +48,7 @@ fun ExplorerView(
     onToggleBookmark: (VaultNote) -> Unit,
     onSyncFilesystem: () -> Unit,
     onTagSelected: (String?) -> Unit,
+    onOpenDirectoryPicker: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showNewNoteDialog by remember { mutableStateOf(false) }
@@ -127,16 +128,29 @@ fun ExplorerView(
                         )
                         if (vaultPath.isNotBlank()) {
                             Spacer(modifier = Modifier.height(3.dp))
-                            Text(
-                                text = vaultPath,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                    color = ObsidianTeal,
-                                    fontSize = 11.sp
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = vaultPath,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                        color = ObsidianTeal,
+                                        fontSize = 11.sp
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "[Switch]",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ObsidianPurpleLight,
+                                    modifier = Modifier
+                                        .clickable { onOpenDirectoryPicker() }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
                             Text(
                                 text = "Direct filesystem access · Survives APK reinstall",
                                 style = MaterialTheme.typography.labelSmall.copy(
@@ -189,7 +203,7 @@ fun ExplorerView(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Action buttons: New Note, New Folder, Bookmarks Toggle
+                // Action buttons: New Note, New Folder, Choose Folder, Bookmarks Toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -219,10 +233,26 @@ fun ExplorerView(
                             contentColor = ObsidianTextPrimary
                         ),
                         border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianBorder),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         modifier = Modifier.testTag("new_folder_button")
                     ) {
                         Icon(Icons.Default.CreateNewFolder, contentDescription = "New Folder", modifier = Modifier.size(16.dp))
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenDirectoryPicker,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = ObsidianSurfaceElevated,
+                            contentColor = ObsidianPurpleLight
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ObsidianPurple.copy(alpha = 0.5f)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                        modifier = Modifier.testTag("open_directory_picker_button")
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = "Choose Folder", modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Vault", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
                     FilterChip(

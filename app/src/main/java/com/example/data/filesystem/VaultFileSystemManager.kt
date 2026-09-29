@@ -1,7 +1,10 @@
 package com.example.data.filesystem
 
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
+import android.util.Log
 import com.example.data.local.VaultDao
 import com.example.data.model.VaultNote
 import com.example.data.scripts.DynamicRuleEngine
@@ -12,6 +15,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -25,27 +29,168 @@ class VaultFileSystemManager(
 ) {
     val dynamicRuleEngine = DynamicRuleEngine(context)
 
+    private val prefs = context.getSharedPreferences("vault_storage_prefs", Context.MODE_PRIVATE)
+    private var _customVaultPath: String? = prefs.getString("custom_vault_path", null)
+
     val vaultRoot: File get() {
+        val custom = _customVaultPath
+        if (!custom.isNullOrBlank()) {
+            val customFile = File(custom)
+            try {
+                if (!customFile.exists()) {
+                    customFile.mkdirs()
+                }
+                ensureSubdirectories(customFile)
+                return customFile
+            } catch (e: Exception) {
+                Log.w("VaultFileSystem", "Failed accessing custom vault path: $custom, falling back to default", e)
+            }
+        }
+
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val publicVault = File(downloadDir, "ObsidianVault")
         return try {
             if (!publicVault.exists()) {
                 publicVault.mkdirs()
             }
-            // Ensure essential system directories exist on external storage
-            File(publicVault, ".database").apply { if (!exists()) mkdirs() }
-            File(publicVault, ".auth").apply { if (!exists()) mkdirs() }
-            File(publicVault, ".config").apply { if (!exists()) mkdirs() }
-            File(publicVault, ".chat").apply { if (!exists()) mkdirs() }
-            File(publicVault, ".scripts").apply { if (!exists()) mkdirs() }
-            File(publicVault, ".diagnostics").apply { if (!exists()) mkdirs() }
-
+            ensureSubdirectories(publicVault)
             publicVault
         } catch (e: Exception) {
             // Absolute fallback path if environment returned empty
             val fallback = File("/storage/emulated/0/Download/ObsidianVault")
             if (!fallback.exists()) fallback.mkdirs()
+            ensureSubdirectories(fallback)
             fallback
+        }
+    }
+
+    private fun ensureSubdirectories(root: File) {
+        try {
+            File(root, ".database").apply { if (!exists()) mkdirs() }
+            File(root, ".auth").apply { if (!exists()) mkdirs() }
+            File(root, ".config").apply { if (!exists()) mkdirs() }
+            File(root, ".chat").apply { if (!exists()) mkdirs() }
+            File(root, ".scripts").apply { if (!exists()) mkdirs() }
+            File(root, ".diagnostics").apply { if (!exists()) mkdirs() }
+        } catch (e: Exception) {
+            Log.e("VaultFileSystem", "Error ensuring vault subdirectories in ${root.absolutePath}", e)
+        }
+    }
+
+    fun setCustomVaultPath(path: String) {
+        _customVaultPath = path.trim()
+        prefs.edit().putString("custom_vault_path", _customVaultPath).apply()
+        val dir = File(_customVaultPath!!)
+        if (!dir.exists()) {
+            try { dir.mkdirs() } catch (e: Exception) {}
+        }
+        ensureSubdirectories(dir)
+    }
+
+    fun resetToDefaultVaultPath(): String {
+        _customVaultPath = null
+        prefs.edit().remove("custom_vault_path").apply()
+        return vaultRoot.absolutePath
+    }
+
+    fun resolvePathFromUri(uri: Uri): String {
+        try {
+            if (DocumentsContract.isTreeUri(uri)) {
+                val docId = DocumentsContract.getTreeDocumentId(uri)
+                if (docId != null) {
+                    val split = docId.split(":")
+                    val type = split[0]
+                    val relativePath = if (split.size > 1) split[1] else ""
+                    if ("primary".equals(type, ignoreCase = true)) {
+                        return if (relativePath.isNotBlank()) {
+                            "${Environment.getExternalStorageDirectory().absolutePath}/$relativePath"
+                        } else {
+                            Environment.getExternalStorageDirectory().absolutePath
+                        }
+                    } else if (type.isNotBlank()) {
+                        // Secondary SD Card
+                        val sdCard = File("/storage/$type")
+                        if (sdCard.exists()) {
+                            return if (relativePath.isNotBlank()) "${sdCard.absolutePath}/$relativePath" else sdCard.absolutePath
+                        }
+                        val rawPath = "/storage/emulated/0/$relativePath"
+                        if (File(rawPath).exists()) return rawPath
+                    }
+                }
+            }
+            // Fallback decoding from URI string
+            val rawPath = uri.path ?: ""
+            if (rawPath.contains("primary:")) {
+                val sub = rawPath.substringAfter("primary:")
+                val decoded = URLDecoder.decode(sub, "UTF-8")
+                return "${Environment.getExternalStorageDirectory().absolutePath}/$decoded"
+            }
+            if (rawPath.startsWith("/storage/")) {
+                return URLDecoder.decode(rawPath, "UTF-8")
+            }
+        } catch (e: Exception) {
+            Log.e("VaultFileSystem", "Failed to resolve path from URI: $uri", e)
+        }
+        return vaultRoot.absolutePath
+    }
+
+    fun getCommonDirectories(): List<File> {
+        val list = mutableListOf<File>()
+        try {
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            list.add(File(downloadDir, "ObsidianVault"))
+            
+            val documentsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+            list.add(documentsDir)
+            list.add(File(documentsDir, "Obsidian"))
+            list.add(File(documentsDir, "Notes"))
+            list.add(downloadDir)
+
+            val primaryRoot = Environment.getExternalStorageDirectory()
+            if (primaryRoot.exists()) {
+                list.add(primaryRoot)
+                val directObsidian = File(primaryRoot, "Obsidian")
+                if (directObsidian.exists()) list.add(directObsidian)
+            }
+
+            val appPrivate = context.getExternalFilesDir(null)
+            if (appPrivate != null) {
+                list.add(appPrivate)
+            }
+        } catch (e: Exception) {
+            Log.e("VaultFileSystem", "Error getting common directories", e)
+        }
+        return list.distinctBy { it.absolutePath }
+    }
+
+    fun listDirectories(parentPath: String): List<File> {
+        return try {
+            val parent = File(parentPath)
+            if (parent.exists() && parent.isDirectory) {
+                parent.listFiles { file -> file.isDirectory && !file.name.startsWith(".") }
+                    ?.sortedBy { it.name.lowercase(Locale.getDefault()) }
+                    ?.toList() ?: emptyList()
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun countNotesInDirectory(dir: File): Int {
+        return try {
+            if (!dir.exists() || !dir.isDirectory) return 0
+            dir.walkTopDown()
+                .maxDepth(3)
+                .filter { file ->
+                    file.isFile &&
+                    (file.extension.equals("md", ignoreCase = true) || file.extension.equals("txt", ignoreCase = true)) &&
+                    !file.name.startsWith(".")
+                }
+                .count()
+        } catch (e: Exception) {
+            0
         }
     }
 

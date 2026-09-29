@@ -1,6 +1,8 @@
 package com.example.ui.vault
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -38,6 +40,7 @@ fun VaultScreen(
     val allFolders by viewModel.allFolders.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
     val syncMessage by viewModel.syncMessage.collectAsStateWithLifecycle()
+    val vaultPath by viewModel.vaultPath.collectAsStateWithLifecycle()
     val graphData by viewModel.graphData.collectAsStateWithLifecycle()
     val chatMessages by viewModel.chatMessages.collectAsStateWithLifecycle()
     val isChatLoading by viewModel.isChatLoading.collectAsStateWithLifecycle()
@@ -52,9 +55,21 @@ fun VaultScreen(
     val hardwareState by viewModel.hardwareState.collectAsStateWithLifecycle()
     val chatGPTSession by viewModel.chatGPTSession.collectAsStateWithLifecycle()
     val activeProvider by viewModel.activeProvider.collectAsStateWithLifecycle()
+    val selectedChatGPTModel by viewModel.selectedChatGPTModel.collectAsStateWithLifecycle()
+    val chatGPTModels by viewModel.chatGPTModels.collectAsStateWithLifecycle()
+    val isLoadingChatGPTModels by viewModel.isLoadingChatGPTModels.collectAsStateWithLifecycle()
 
     var showAndroidSkillsDialog by remember { mutableStateOf(false) }
     var showStorageAuthDialog by remember { mutableStateOf(false) }
+    var showDirectoryPickerDialog by remember { mutableStateOf(false) }
+
+    val safFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            viewModel.switchVaultDirectoryFromUri(it)
+        }
+    }
 
     // Back handler: pop back to explorer if on another tab
     BackHandler(enabled = activeTab != VaultTab.EXPLORER) {
@@ -285,13 +300,14 @@ fun VaultScreen(
                         isSyncing = isSyncing,
                         syncMessage = syncMessage,
                         selectedTagFilter = selectedTagFilter,
-                        vaultPath = viewModel.vaultAbsolutePath,
+                        vaultPath = vaultPath,
                         onNoteClick = { viewModel.openNote(it) },
                         onCreateNote = { title, folder -> viewModel.createNote(title, folder) },
                         onCreateFolder = { viewModel.createFolder(it) },
                         onToggleBookmark = { viewModel.toggleBookmark(it) },
                         onSyncFilesystem = { viewModel.syncFilesystem() },
-                        onTagSelected = { viewModel.setTagFilter(it) }
+                        onTagSelected = { viewModel.setTagFilter(it) },
+                        onOpenDirectoryPicker = { showDirectoryPickerDialog = true }
                     )
                 }
                 VaultTab.EDITOR -> {
@@ -339,6 +355,17 @@ fun VaultScreen(
                         isLoading = isChatLoading,
                         selectedModel = chatModel,
                         onModelSelected = { viewModel.setChatModel(it) },
+                        activeProvider = activeProvider,
+                        onSelectProvider = { viewModel.setActiveProvider(it) },
+                        selectedChatGPTModel = selectedChatGPTModel,
+                        chatGPTModels = chatGPTModels,
+                        isLoadingChatGPTModels = isLoadingChatGPTModels,
+                        chatGPTSession = chatGPTSession,
+                        onSelectChatGPTModel = { viewModel.setSelectedChatGPTModel(it) },
+                        onRefreshChatGPTModels = { viewModel.refreshChatGPTModels() },
+                        onAddCustomChatGPTModel = { id, name -> viewModel.addCustomChatGPTModel(id, name) },
+                        onInitiateChatGPTLogin = { viewModel.initiateChatGPTLogin() },
+                        onSignOutOfChatGPT = { viewModel.signOutOfChatGPT() },
                         onSendMessage = { text, askVault -> viewModel.sendChatMessage(text, askVault) },
                         onSynthesizeTopic = { viewModel.synthesizeWikiTopic(it) },
                         onWikilinkClicked = { viewModel.openNoteByTitle(it) },
@@ -364,10 +391,15 @@ fun VaultScreen(
         VaultStorageAuthDialog(
             authConfig = authConfig,
             storageAudit = storageAudit,
-            vaultPath = viewModel.vaultAbsolutePath,
+            vaultPath = vaultPath,
             hardwareState = hardwareState,
             chatGPTSession = chatGPTSession,
             activeProvider = activeProvider,
+            selectedChatGPTModel = selectedChatGPTModel,
+            chatGPTModels = chatGPTModels,
+            isLoadingChatGPTModels = isLoadingChatGPTModels,
+            onRefreshChatGPTModels = { viewModel.refreshChatGPTModels() },
+            onSelectChatGPTModel = { viewModel.setSelectedChatGPTModel(it) },
             onSelectProvider = { viewModel.setActiveProvider(it) },
             onInitiateChatGPTLogin = { viewModel.initiateChatGPTLogin() },
             onCompleteChatGPTLogin = { url -> viewModel.completeChatGPTLogin(url) { _, _ -> } },
@@ -378,7 +410,34 @@ fun VaultScreen(
             onResyncStorage = { viewModel.syncFilesystem() },
             onExportBackupZip = { viewModel.exportBackupZip() },
             onClearChatHistory = { viewModel.clearChat() },
-            onExportChatMarkdown = { viewModel.exportChatMarkdown() }
+            onExportChatMarkdown = { viewModel.exportChatMarkdown() },
+            onOpenDirectoryPicker = {
+                showStorageAuthDialog = false
+                showDirectoryPickerDialog = true
+            }
+        )
+    }
+
+    if (showDirectoryPickerDialog) {
+        VaultDirectoryPickerDialog(
+            currentVaultPath = vaultPath,
+            onSelectDirectory = { path ->
+                viewModel.switchVaultDirectory(path)
+            },
+            onLaunchSafPicker = {
+                safFolderLauncher.launch(null)
+            },
+            onResetToDefault = {
+                viewModel.resetVaultDirectory()
+            },
+            onBrowseDirectories = { path ->
+                viewModel.browseDirectories(path)
+            },
+            onCountNotes = { file ->
+                viewModel.countNotesInDirectory(file)
+            },
+            commonDirectories = viewModel.getCommonDirectories(),
+            onDismiss = { showDirectoryPickerDialog = false }
         )
     }
 

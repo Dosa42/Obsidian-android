@@ -41,13 +41,21 @@ data class VaultAuthConfig(
     val lastUpdated: Long = System.currentTimeMillis()
 )
 
-class VaultAuthConfigManager(private val context: Context) {
+class VaultAuthConfigManager(
+    private val context: Context,
+    private val vaultRootProvider: () -> File = {
+        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        File(downloadDir, "ObsidianVault")
+    }
+) {
     private val TAG = "VaultAuthConfigManager"
 
     private val authDir: File get() {
-        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val vaultDir = File(downloadDir, "ObsidianVault")
-        val dir = File(vaultDir, ".auth")
+        val root = try { vaultRootProvider() } catch (e: Exception) {
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            File(downloadDir, "ObsidianVault")
+        }
+        val dir = File(root, ".auth")
         if (!dir.exists()) {
             dir.mkdirs()
         }

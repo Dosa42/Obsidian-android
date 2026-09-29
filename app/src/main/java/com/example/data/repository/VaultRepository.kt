@@ -48,8 +48,8 @@ class VaultRepository(
     val fileSystemManager: VaultFileSystemManager,
     private val context: Context
 ) {
-    val authConfigManager = VaultAuthConfigManager(context)
-    val chatStorageManager = VaultChatStorageManager(context)
+    val authConfigManager = VaultAuthConfigManager(context, vaultRootProvider = { fileSystemManager.vaultRoot })
+    val chatStorageManager = VaultChatStorageManager(context, vaultRootProvider = { fileSystemManager.vaultRoot })
     val skillsManager = AndroidSkillsManager(context)
 
     val skillsCatalog: List<AndroidSkillDefinition> get() = skillsManager.skillsCatalog
@@ -58,6 +58,36 @@ class VaultRepository(
     val authConfig: StateFlow<VaultAuthConfig> get() = authConfigManager.configFlow
 
     fun getDynamicScripts(): List<DynamicScriptRule> = fileSystemManager.getDynamicScripts()
+
+    suspend fun switchVaultDirectory(newPath: String): Int = withContext(Dispatchers.IO) {
+        fileSystemManager.setCustomVaultPath(newPath)
+        authConfigManager.initialize()
+        val count = fileSystemManager.syncFilesystemToDatabase()
+        count
+    }
+
+    suspend fun resetVaultDirectory(): Int = withContext(Dispatchers.IO) {
+        fileSystemManager.resetToDefaultVaultPath()
+        authConfigManager.initialize()
+        val count = fileSystemManager.syncFilesystemToDatabase()
+        count
+    }
+
+    fun resolveSafUri(uri: android.net.Uri): String {
+        return fileSystemManager.resolvePathFromUri(uri)
+    }
+
+    fun getCommonDirectories(): List<File> {
+        return fileSystemManager.getCommonDirectories()
+    }
+
+    fun browseDirectories(parentPath: String): List<File> {
+        return fileSystemManager.listDirectories(parentPath)
+    }
+
+    fun countNotesInDirectory(dir: File): Int {
+        return fileSystemManager.countNotesInDirectory(dir)
+    }
 
     suspend fun executeDynamicScriptFile(scriptId: String): ScriptExecutionSummary {
         return fileSystemManager.executeDynamicScriptFile(scriptId)

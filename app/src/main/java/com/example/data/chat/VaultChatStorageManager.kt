@@ -13,13 +13,21 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-class VaultChatStorageManager(private val context: Context) {
+class VaultChatStorageManager(
+    private val context: Context,
+    private val vaultRootProvider: () -> File = {
+        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        File(downloadDir, "ObsidianVault")
+    }
+) {
     private val TAG = "VaultChatStorageManager"
 
     private val chatDir: File get() {
-        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val vaultDir = File(downloadDir, "ObsidianVault")
-        val dir = File(vaultDir, ".chat")
+        val root = try { vaultRootProvider() } catch (e: Exception) {
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            File(downloadDir, "ObsidianVault")
+        }
+        val dir = File(root, ".chat")
         if (!dir.exists()) {
             dir.mkdirs()
         }

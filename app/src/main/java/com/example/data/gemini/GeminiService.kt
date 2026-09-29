@@ -49,9 +49,13 @@ class GeminiService {
     """.trimIndent()
 
     val developerToolsSchema = """
-        ### Autonomous Developer Tools & Filesystem Bridge:
-        You have direct tool execution permissions over the filesystem at `/storage/emulated/0/Download/ObsidianVault`.
-        Whenever the user asks to create, update, delete, rename, refactor wikilinks, create folders, inspect vault health, or interact with Android OS hardware/telemetry, invoke the corresponding fenced `tool_call` blocks in your response:
+        ### Autonomous Developer Tools & Android Filesystem Bridge:
+        You have REAL, DIRECT tool execution permissions over the Android OS filesystem at `/storage/emulated/0/Download/ObsidianVault` and Android hardware telemetry.
+        
+        CRITICAL EXECUTION MANDATE:
+        - NEVER simulate, pretend, or merely say in conversation that you performed an action without emitting the exact `tool_call` block or function call.
+        - The Android client intercepts tool calls, physically executes them against SQLite, external storage, and Android hardware sensors, and displays the verified execution status badge.
+        - When the user asks to create, update, delete, rename, refactor wikilinks, create folders, inspect vault health, or read Android telemetry/sensors, emit the corresponding fenced `tool_call` JSON block:
 
         1. To create or overwrite a note:
         ```tool_call
